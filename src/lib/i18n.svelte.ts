@@ -1,0 +1,440 @@
+import { browser } from "$app/environment";
+
+export type Lang = "en" | "ru";
+const KEY = "varmlen.lang";
+
+type Dict = Record<string, string>;
+
+const EN: Dict = {
+  // nav
+  "nav.home": "Home",
+  "nav.split": "Split",
+  "nav.settings": "Settings",
+
+  // home / connection
+  "status.disconnected": "Not connected",
+  "status.connecting": "Connecting",
+  "status.connected": "Connected",
+  "status.dropped": "VPN dropped - traffic blocked",
+  "conn.selectLocation": "Select a location first",
+  "conn.dropped": "Connection lost. The kill switch is blocking all traffic. Reconnect, or allow traffic below.",
+  "conn.droppedNoKill": "Connection lost.",
+  "conn.allowTraffic": "Disconnect & allow traffic",
+  "home.empty": "No subscriptions yet. Tap + in the top-right corner.",
+  "home.autoUpdate": "auto-update {h}h",
+  "home.expires": "Expires: {date}",
+  "home.variants": "{n} variants",
+
+  // subscription menu
+  "menu.info": "Subscription info",
+  "menu.rename": "Rename",
+  "menu.json": "Edit source JSON",
+  "menu.pin": "Pin",
+  "menu.unpin": "Unpin",
+  "menu.remove": "Remove subscription",
+
+  // info modal
+  "info.url": "URL",
+  "info.imported": "Imported",
+  "info.autoUpdate": "Auto-update",
+  "info.everyH": "every {h} h",
+  "info.traffic": "Traffic",
+  "info.expires": "Expires",
+  "info.servers": "Servers",
+  "info.support": "Support",
+
+  // rename modal
+  "rename.title": "Rename subscription",
+
+  // import modal
+  "import.title": "Add subscription",
+  "import.hint": "Choose how you want to add the subscription.",
+  "import.importing": "Importing…",
+  "import.add": "Add",
+  "import.back": "Back",
+  "import.fromClipboard": "Paste from clipboard",
+  "import.link": "Enter link",
+  "import.json": "Enter JSON",
+  "import.linkHint": "A subscription URL or a vless:// / vmess:// / trojan:// / ss:// link.",
+  "import.jsonHint": "Paste an xray JSON config or an object containing outbounds.",
+  "import.clipboardFail": "Couldn't read the clipboard - paste it below.",
+  "import.clipboardEmpty": "The clipboard is empty - paste it below.",
+
+  // JSON editor
+  "json.title": "Subscription JSON",
+  "json.edited": "Edited locally. Automatic updates are paused until you refresh from the source.",
+  "json.save": "Save changes",
+  "json.saving": "Saving…",
+  "json.locationTitle": "Location JSON",
+  "json.locationHint": "Saved locally. Automatic updates pause so the provider cannot overwrite this edit; Refresh restores the provider version.",
+
+  // generic
+  "common.close": "Close",
+  "common.cancel": "Cancel",
+  "common.save": "Save",
+  "common.remove": "Remove",
+  "location.json": "Location JSON",
+  "location.name": "Name",
+  "location.protocol": "Protocol",
+  "location.address": "Address",
+  "location.port": "Port",
+  "location.password": "Password",
+  "location.username": "Username",
+  "location.auth": "Authentication",
+  "location.method": "Encryption method",
+  "location.transport": "Transport",
+  "location.security": "Security",
+  "location.fingerprint": "Fingerprint",
+  "location.publicKey": "Public key",
+  "location.privateKey": "Private key",
+  "location.peerPublicKey": "Peer public key",
+  "location.localAddress": "Local address / CIDR",
+  "location.preSharedKey": "Pre-shared key",
+  "location.reserved": "Reserved bytes",
+  "location.domainStrategy": "Domain strategy",
+  "location.shortId": "Short ID",
+  "location.path": "Path",
+  "location.mode": "Mode",
+  "location.packetEncoding": "Packet encoding",
+  "location.extraParams": "Additional parameters",
+  "location.addParam": "Add parameter",
+  "location.paramKey": "Key",
+  "location.paramValue": "Value",
+
+  // split
+  "split.title": "Split tunneling",
+  "split.apps": "Apps",
+  "split.websites": "Websites",
+  "split.mode": "Mode",
+  "split.modeGeneral": "General",
+  "split.modeSelective": "Selective",
+  "split.active": "{n} active",
+  "split.mode.selective": "VPN works only for the listed entries here. Everything else stays direct.",
+  "split.mode.general": "VPN works for everything except the listed entries here (which stay direct).",
+  "split.searchApps": "Search apps",
+  "split.noAppsTitle": "No apps yet",
+  "split.noAppsHint": "Tap + to pick from your installed apps, or choose one by file.",
+  "split.noAppsMatch": "No apps match the query.",
+  "split.sitePlaceholder": "example.com or *.example.com",
+  "split.noSitesTitle": "No websites yet",
+  "split.noSitesHint": "Add a hostname (example.com) or a wildcard pattern (*.example.com).",
+  "split.addApp": "Add app",
+  "split.srcInstalled": "Installed",
+  "split.srcRunning": "Running",
+  "split.searchInstalled": "Search installed apps",
+  "split.loadingApps": "Loading installed apps…",
+  "split.noInstalled": "No installed apps found.",
+  "split.noInstalledMatch": "Nothing matches your search.",
+  "split.pickFileHint": "Don't see your app (e.g. a Steam game)? Pick its .desktop file or executable.",
+  "split.manualHint": "Don't see your app (e.g. a Steam game)? Type its process name, or choose its file.",
+  "split.manualPlaceholder": "Process name (e.g. cs2)",
+  "split.chooseFile": "Choose from file…",
+  "split.addSelected": "Add ({n})",
+  "split.appsProxyUnavailable": "Per-app split tunnelling is unavailable in Proxy mode. Switch to TUN mode.",
+
+  // settings
+  "settings.title": "Settings",
+  "settings.appearance": "Appearance",
+  "settings.dark": "Dark",
+  "settings.light": "Light",
+  "settings.general": "General",
+  "settings.language": "Language",
+  "settings.killswitch": "Killswitch",
+  "settings.killswitchSub": "Block all traffic if the VPN connection drops.",
+  "settings.allowLan": "Allow LAN traffic",
+  "settings.allowLanSub": "Keep printers, NAS, and local devices reachable.",
+  "settings.closeToTray": "Close to tray",
+  "settings.closeToTraySub": "Closing the window keeps Varmlen running in the tray; off = quit fully.",
+  "settings.autostart": "Launch at login",
+  "settings.autostartSub": "Start Varmlen automatically when you sign in.",
+  "settings.autostartMinimized": "Start minimized",
+  "settings.autostartMinimizedSub": "Launch straight to the tray, without a window.",
+  "settings.permissions": "Permissions",
+  "settings.diagnostics": "Diagnostics",
+  "settings.notifications": "Notifications",
+  "settings.notificationsOn": "Enabled. Shows speed and uptime while connected.",
+  "settings.notificationsOff": "Off. Tap to enable the VPN status notification.",
+  "settings.logLevel": "Log level",
+  "settings.logLevelSub": "Verbosity of the VPN log (xray + tun2socks).",
+  "settings.viewLog": "View log",
+  "settings.viewLogSub": "Open the VPN log - useful when a connection fails.",
+  "settings.logEmpty": "(log is empty - connect once to populate it)",
+  "settings.logClear": "Clear",
+  "settings.logRefresh": "Refresh",
+  "settings.pingMethod": "Ping method",
+  "settings.pingMethodSub": "How server latency is measured.",
+  "settings.subscriptionUa": "Subscription User-Agent",
+  "settings.subscriptionUaSub": "Used on the next subscription import or refresh.",
+  "settings.subscriptionAutoUpdate": "Automatic subscription updates",
+  "settings.subscriptionAutoUpdateSub": "Refresh remote subscriptions on their provider schedule.",
+  "ping.tcp": "TCP",
+  "ping.proxy": "Via proxy (HTTP)",
+  "ping.na": "n/a",
+  "ping.ms": "{n} ms",
+
+  // VPN mode
+  "settings.vpnMode": "VPN mode",
+  "mode.tun": "TUN (system-wide)",
+  "mode.proxy": "Proxy (SOCKS)",
+  "mode.tunSub": "Routes all system traffic through a virtual network interface.",
+  "mode.proxySub": "Local SOCKS proxy at 127.0.0.1:2081. Configure apps or the system to use it.",
+
+  // VPN core (xray)
+  "settings.core": "VPN core",
+  "core.checking": "Checking for updates…",
+  "core.checkFailed": "Couldn't check for updates",
+  "core.notInstalled": "Not installed",
+  "core.upToDate": "Up to date",
+  "core.updateAvailable": "Update available",
+  "core.latest": "latest {v}",
+  "core.install": "Install",
+  "core.update": "Update",
+  "core.updating": "Downloading…",
+  "core.versions": "Versions",
+  "core.versionsTitle": "Core versions",
+  "core.downloaded": "Downloaded",
+  "core.available": "Available",
+  "core.fetch": "Fetch",
+  "core.fetchHint": "Fetch to see versions available to download.",
+  "core.noDownloaded": "No versions downloaded yet.",
+  "core.preview": "pre-release",
+  "core.currentlyInstalled": "currently installed",
+  "core.active": "Active",
+  "core.use": "Use",
+  "core.download": "Download",
+  "core.reinstall": "Re-download",
+  "core.delete": "Delete",
+
+};
+
+const RU: Dict = {
+  "nav.home": "Главная",
+  "nav.split": "Сплит",
+  "nav.settings": "Настройки",
+
+  "status.disconnected": "Не подключено",
+  "status.connecting": "Подключение",
+  "status.connected": "Подключено",
+  "status.dropped": "VPN отвалился - трафик заблокирован",
+  "conn.selectLocation": "Сначала выберите локацию",
+  "conn.dropped": "Соединение потеряно. Kill switch блокирует весь трафик. Переподключитесь или разрешите трафик ниже.",
+  "conn.droppedNoKill": "Соединение потеряно.",
+  "conn.allowTraffic": "Отключить и разрешить трафик",
+  "home.empty": "Пока нет подписок. Нажмите + в правом верхнем углу.",
+  "home.autoUpdate": "автообновление {h}ч",
+  "home.expires": "Истекает: {date}",
+  "home.variants": "вариантов: {n}",
+
+  "menu.info": "Информация о подписке",
+  "menu.rename": "Переименовать",
+  "menu.json": "Изменить исходный JSON",
+  "menu.pin": "Закрепить",
+  "menu.unpin": "Открепить",
+  "menu.remove": "Удалить подписку",
+
+  "info.url": "Ссылка",
+  "info.imported": "Добавлена",
+  "info.autoUpdate": "Автообновление",
+  "info.everyH": "каждые {h} ч",
+  "info.traffic": "Трафик",
+  "info.expires": "Истекает",
+  "info.servers": "Серверы",
+  "info.support": "Поддержка",
+
+  "rename.title": "Переименовать подписку",
+
+  "import.title": "Добавить подписку",
+  "import.hint": "Выберите способ добавления подписки.",
+  "import.importing": "Добавление…",
+  "import.add": "Добавить",
+  "import.back": "Назад",
+  "import.fromClipboard": "Вставить из буфера",
+  "import.link": "Ввести ссылку",
+  "import.json": "Ввести JSON",
+  "import.linkHint": "URL подписки или ссылка vless:// / vmess:// / trojan:// / ss://.",
+  "import.jsonHint": "Вставьте JSON-конфиг xray или объект с outbounds.",
+  "import.clipboardFail": "Не удалось прочитать буфер - вставьте ниже.",
+  "import.clipboardEmpty": "Буфер обмена пуст - вставьте ниже.",
+
+  "json.title": "JSON подписки",
+  "json.edited": "Изменён локально. Автообновление приостановлено до ручного обновления из источника.",
+  "json.save": "Сохранить изменения",
+  "json.saving": "Сохранение…",
+  "json.locationTitle": "JSON локации",
+  "json.locationHint": "Изменение сохраняется локально, а автообновление приостанавливается. Кнопка обновления вернёт версию провайдера.",
+
+  "common.close": "Закрыть",
+  "common.cancel": "Отмена",
+  "common.save": "Сохранить",
+  "common.remove": "Удалить",
+  "location.json": "JSON локации",
+  "location.name": "Название",
+  "location.protocol": "Протокол",
+  "location.address": "Адрес",
+  "location.port": "Порт",
+  "location.password": "Пароль",
+  "location.username": "Имя пользователя",
+  "location.auth": "Аутентификация",
+  "location.method": "Метод шифрования",
+  "location.transport": "Транспорт",
+  "location.security": "Защита",
+  "location.fingerprint": "Отпечаток",
+  "location.publicKey": "Публичный ключ",
+  "location.privateKey": "Приватный ключ",
+  "location.peerPublicKey": "Публичный ключ пира",
+  "location.localAddress": "Локальный адрес / CIDR",
+  "location.preSharedKey": "Предварительный ключ",
+  "location.reserved": "Reserved-байты",
+  "location.domainStrategy": "Стратегия доменов",
+  "location.shortId": "Short ID",
+  "location.path": "Путь",
+  "location.mode": "Режим",
+  "location.packetEncoding": "Кодирование пакетов",
+  "location.extraParams": "Дополнительные параметры",
+  "location.addParam": "Добавить параметр",
+  "location.paramKey": "Ключ",
+  "location.paramValue": "Значение",
+
+  "split.title": "Раздельный туннель",
+  "split.apps": "Приложения",
+  "split.websites": "Сайты",
+  "split.mode": "Режим",
+  "split.modeGeneral": "Общий",
+  "split.modeSelective": "Выборочный",
+  "split.active": "активно: {n}",
+  "split.mode.selective": "VPN работает только для записей из этого списка. Остальное - напрямую.",
+  "split.mode.general": "VPN работает для всего, кроме записей из этого списка (они идут напрямую).",
+  "split.searchApps": "Поиск приложений",
+  "split.noAppsTitle": "Пока нет приложений",
+  "split.noAppsHint": "Нажмите +, чтобы выбрать из установленных приложений или указать файл.",
+  "split.noAppsMatch": "Ничего не найдено по запросу.",
+  "split.sitePlaceholder": "example.com или *.example.com",
+  "split.noSitesTitle": "Пока нет сайтов",
+  "split.noSitesHint": "Добавьте домен (example.com) или шаблон (*.example.com).",
+  "split.addApp": "Добавить приложение",
+  "split.srcInstalled": "Установленные",
+  "split.srcRunning": "Запущенные",
+  "split.searchInstalled": "Поиск установленных приложений",
+  "split.loadingApps": "Загрузка приложений…",
+  "split.noInstalled": "Установленные приложения не найдены.",
+  "split.noInstalledMatch": "Ничего не найдено.",
+  "split.pickFileHint": "Нет вашего приложения (например, игры Steam)? Выберите его .desktop-файл или исполняемый файл.",
+  "split.manualHint": "Нет приложения в списке (например, игра Steam)? Впишите имя его процесса или выберите файл.",
+  "split.manualPlaceholder": "Имя процесса (например cs2)",
+  "split.chooseFile": "Выбрать файл…",
+  "split.addSelected": "Добавить ({n})",
+  "split.appsProxyUnavailable": "Per-app split-туннелинг недоступен в режиме Proxy. Переключитесь на режим TUN.",
+
+  "settings.title": "Настройки",
+  "settings.appearance": "Оформление",
+  "settings.dark": "Тёмная",
+  "settings.light": "Светлая",
+  "settings.general": "Общие",
+  "settings.language": "Язык",
+  "settings.killswitch": "Killswitch",
+  "settings.killswitchSub": "Блокировать весь трафик, если VPN отключился.",
+  "settings.allowLan": "Разрешить локальную сеть",
+  "settings.allowLanSub": "Оставить доступными принтеры, NAS и локальные устройства.",
+  "settings.closeToTray": "Закрывать в трей",
+  "settings.closeToTraySub": "Крестик сворачивает Varmlen в трей; выкл - полный выход.",
+  "settings.autostart": "Запуск при входе",
+  "settings.autostartSub": "Запускать Varmlen автоматически при входе в систему.",
+  "settings.autostartMinimized": "Запускать свёрнутым",
+  "settings.autostartMinimizedSub": "Запуск сразу в трей, без окна.",
+  "settings.permissions": "Разрешения",
+  "settings.diagnostics": "Диагностика",
+  "settings.notifications": "Уведомления",
+  "settings.notificationsOn": "Включены. Показывают скорость и время подключения.",
+  "settings.notificationsOff": "Выключены. Нажми, чтобы включить уведомление статуса VPN.",
+  "settings.logLevel": "Уровень логов",
+  "settings.logLevelSub": "Подробность VPN-лога (xray + tun2socks).",
+  "settings.viewLog": "Посмотреть лог",
+  "settings.viewLogSub": "Открыть VPN-лог - полезно, если не подключается.",
+  "settings.logEmpty": "(лог пуст - заполнится после подключения)",
+  "settings.logClear": "Очистить",
+  "settings.logRefresh": "Обновить",
+  "settings.pingMethod": "Метод пинга",
+  "settings.pingMethodSub": "Как измеряется задержка серверов.",
+  "settings.subscriptionUa": "User-Agent подписок",
+  "settings.subscriptionUaSub": "Применится при следующем импорте или обновлении подписки.",
+  "settings.subscriptionAutoUpdate": "Автообновление подписок",
+  "settings.subscriptionAutoUpdateSub": "Обновлять удалённые подписки по расписанию провайдера.",
+  "ping.tcp": "TCP",
+  "ping.proxy": "Через прокси (HTTP)",
+  "ping.na": "н/д",
+  "ping.ms": "{n} мс",
+
+  "settings.vpnMode": "Режим VPN",
+  "mode.tun": "TUN (всё устройство)",
+  "mode.proxy": "Прокси (SOCKS)",
+  "mode.tunSub": "Направляет весь системный трафик через виртуальный сетевой интерфейс.",
+  "mode.proxySub": "Локальный SOCKS-прокси 127.0.0.1:2081. Укажите его в приложениях или системе.",
+
+  "settings.core": "Ядро VPN",
+  "core.checking": "Проверка обновлений…",
+  "core.checkFailed": "Не удалось проверить обновления",
+  "core.notInstalled": "Не установлено",
+  "core.upToDate": "Актуальная версия",
+  "core.updateAvailable": "Доступно обновление",
+  "core.latest": "последняя {v}",
+  "core.install": "Установить",
+  "core.update": "Обновить",
+  "core.updating": "Загрузка…",
+  "core.versions": "Версии",
+  "core.versionsTitle": "Версии ядра",
+  "core.downloaded": "Скачанные",
+  "core.available": "Доступные",
+  "core.fetch": "Получить",
+  "core.fetchHint": "Нажмите «Получить», чтобы увидеть доступные для скачивания версии.",
+  "core.noDownloaded": "Пока нет скачанных версий.",
+  "core.preview": "пре-релиз",
+  "core.currentlyInstalled": "сейчас установлена",
+  "core.active": "Активна",
+  "core.use": "Выбрать",
+  "core.download": "Скачать",
+  "core.reinstall": "Перекачать",
+  "core.delete": "Удалить",
+
+};
+
+const DICTS: Record<Lang, Dict> = { en: EN, ru: RU };
+
+function detect(): Lang {
+  if (!browser) return "en";
+  const stored = localStorage.getItem(KEY);
+  if (stored === "ru" || stored === "en") return stored;
+  return navigator.language?.toLowerCase().startsWith("ru") ? "ru" : "en";
+}
+
+class I18n {
+  lang = $state<Lang>(detect());
+
+  set(l: Lang): void {
+    this.lang = l;
+    if (browser) localStorage.setItem(KEY, l);
+  }
+
+  /** Translate a key, substituting {placeholders} from vars. Falls back to
+   *  English, then to the key itself. */
+  t(key: string, vars?: Record<string, string | number>): string {
+    let s = DICTS[this.lang][key] ?? EN[key] ?? key;
+    if (vars) {
+      for (const [k, v] of Object.entries(vars)) {
+        s = s.replaceAll(`{${k}}`, String(v));
+      }
+    }
+    return s;
+  }
+}
+
+export const i18n = new I18n();
+
+/** Reactive translate helper - reads i18n.lang, so templates update on change. */
+export function t(key: string, vars?: Record<string, string | number>): string {
+  return i18n.t(key, vars);
+}
+
+export const LANGUAGES: { value: Lang; label: string }[] = [
+  { value: "en", label: "English" },
+  { value: "ru", label: "Русский" },
+];
