@@ -1,6 +1,7 @@
 import { browser } from "$app/environment";
+import { initialLanguage, type Lang } from "./language";
 
-export type Lang = "en" | "ru";
+export type { Lang } from "./language";
 const KEY = "varmlen.lang";
 
 type Dict = Record<string, string>;
@@ -378,9 +379,7 @@ const DICTS: Record<Lang, Dict> = { en: EN, ru: RU };
 
 function detect(): Lang {
   if (!browser) return "en";
-  const stored = localStorage.getItem(KEY);
-  if (stored === "ru" || stored === "en") return stored;
-  return navigator.language?.toLowerCase().startsWith("ru") ? "ru" : "en";
+  return initialLanguage(localStorage.getItem(KEY));
 }
 
 class I18n {

@@ -7,6 +7,12 @@ tunneling. Built on Tauri 2 and SvelteKit.
 > automated build/package checks; final VPN acceptance still requires a real
 > Windows machine.
 
+## Screenshots
+
+| Home | Split tunneling | Settings |
+| --- | --- | --- |
+| ![Varmlen home with AegisVPN locations](docs/screenshots/home.png) | ![Varmlen per-app split tunneling](docs/screenshots/split.png) | ![Varmlen settings in English](docs/screenshots/settings.png) |
+
 ## Features
 
 - Xray's native TUN inbound over Wintun; there is no tun2socks or proxy mode.
