@@ -9,9 +9,18 @@ tunneling. Built on Tauri 2 and SvelteKit.
 
 ## Screenshots
 
-| Home | Split tunneling | Settings |
-| --- | --- | --- |
-| ![Varmlen Windows home with AegisVPN locations](docs/screenshots/home.png) | ![Varmlen Windows per-app split tunneling](docs/screenshots/split.png) | ![Varmlen Windows settings in English](docs/screenshots/settings.png) |
+<table>
+  <tr>
+    <th width="33.333%">Home</th>
+    <th width="33.333%">Split tunneling</th>
+    <th width="33.333%">Settings</th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/home.png" width="100%" alt="Varmlen Windows home with AegisVPN locations"></td>
+    <td><img src="docs/screenshots/split.png" width="100%" alt="Varmlen Windows per-app split tunneling"></td>
+    <td><img src="docs/screenshots/settings.png" width="100%" alt="Varmlen Windows settings in English"></td>
+  </tr>
+</table>
 
 ## Features
 
