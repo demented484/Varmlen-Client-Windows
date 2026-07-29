@@ -22,6 +22,8 @@ pub struct ConnectRequest {
     pub validation_config: String,
     pub server_endpoints: Vec<SocketAddr>,
     pub excluded_apps: Vec<AppSelector>,
+    #[serde(default)]
+    pub apps_selective: bool,
     pub killswitch: bool,
     pub allow_lan: bool,
 }

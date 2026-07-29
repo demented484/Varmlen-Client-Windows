@@ -106,19 +106,17 @@ export interface InstalledApp {
   icon: string | null;
 }
 
-/** Installed desktop apps, parsed from the system's `.desktop` entries. */
+/** Installed Windows applications discovered from App Paths. */
 export function listInstalledApps(): Promise<InstalledApp[]> {
   return invoke<InstalledApp[]>("list_installed_apps");
 }
 
-/** Open the system file picker (XDG portal → native DE dialog with search).
- *  Returns the chosen path, or null if cancelled. */
+/** Open the native Windows executable picker. Returns null if cancelled. */
 export function pickFile(): Promise<string | null> {
   return invoke<string | null>("pick_file");
 }
 
-/** Build an app entry from a user-picked file: a `.desktop` file is parsed
- *  (name / exec / icon), any other file is treated as the binary. */
+/** Build an app entry from a user-picked `.exe`. */
 export function appFromFile(path: string): Promise<InstalledApp | null> {
   return invoke<InstalledApp | null>("app_from_file", { path });
 }
@@ -150,9 +148,8 @@ export function coreInfo(kind: CoreKind): Promise<CoreInfo> {
   return invoke<CoreInfo>("core_info", { kind });
 }
 
-/** Download a specific version (or latest when `version` is null) into the
- *  local cache. Emits `core://progress` events. First install for a kind
- *  auto-activates it. Linux's packaged daemon uses its root-owned Xray copy. */
+/** Core replacement is intentionally unavailable: Windows uses the
+ *  installer-pinned Xray owned by the privileged service. */
 export function coreInstall(kind: CoreKind, version: string | null = null): Promise<string> {
   return invoke<string>("core_install", { kind, version });
 }
@@ -208,12 +205,10 @@ export interface HelperResponse {
   error: string | null;
 }
 
-/** Connect in the given mode: "tun" (full system through a virtual network
- *  interface) or "proxy" (local SOCKS proxy managed by the Linux daemon). */
+/** Connect through Xray's native Windows TUN data plane. */
 export function vpnConnect(
   server: VlessServer,
   split: SplitInput,
-  mode: "tun" | "proxy",
   killswitch: boolean,
   allowLan: boolean,
   logLevel: string,
@@ -221,7 +216,6 @@ export function vpnConnect(
   return invoke<HelperResponse>("vpn_connect", {
     server,
     split,
-    mode,
     killswitch,
     allowLan,
     logLevel,
@@ -232,7 +226,7 @@ export function vpnDisconnect(): Promise<HelperResponse> {
   return invoke<HelperResponse>("vpn_disconnect");
 }
 
-/** The VPN log (Android: VpnService steps + xray/tun2socks output). */
+/** The VPN service and Xray log. */
 export function vpnLog(): Promise<string> {
   return invoke<string>("vpn_log");
 }
@@ -270,12 +264,6 @@ export function vpnStatus(): Promise<HelperResponse> {
  *  is active. Rejects on DNS/timeout/refused. */
 export function tcpPingHost(host: string, port: number, timeoutMs = 2500): Promise<number> {
   return invoke<number>("tcp_ping_host", { host, port, timeoutMs });
-}
-
-/** Via-proxy RTT in ms: spins a throwaway xray for `server` and times an HTTP
- *  HEAD to a 204 endpoint through it. Rejects on timeout / unreachable. */
-export function proxyGetPing(server: VlessServer, timeoutMs = 5000): Promise<number> {
-  return invoke<number>("proxy_get_ping", { server, timeoutMs });
 }
 
 /** One-time migration: read any prior dev-origin localStorage (subs, split,

@@ -19,11 +19,14 @@ enum Effect {
     RestorePrevious,
     ClearNetworkOpen,
     ClearNetworkBlocked,
+    AuditActive,
 }
 
 struct RecordingBackend {
     effects: Vec<Effect>,
     failures: Vec<Effect>,
+    active_running: bool,
+    keep_blocked_on_failure: bool,
 }
 
 impl RecordingBackend {
@@ -31,6 +34,8 @@ impl RecordingBackend {
         Self {
             effects: Vec::new(),
             failures: Vec::new(),
+            active_running: true,
+            keep_blocked_on_failure: true,
         }
     }
 
@@ -38,6 +43,8 @@ impl RecordingBackend {
         Self {
             effects: Vec::new(),
             failures: failures.to_vec(),
+            active_running: true,
+            keep_blocked_on_failure: true,
         }
     }
 
@@ -103,6 +110,15 @@ impl ConnectionBackend for RecordingBackend {
             Effect::ClearNetworkOpen
         })
     }
+
+    async fn active_is_running(&mut self) -> Result<bool, ServiceError> {
+        self.record(Effect::AuditActive)?;
+        Ok(self.active_running)
+    }
+
+    fn unexpected_failure_keep_blocked(&self) -> bool {
+        self.keep_blocked_on_failure
+    }
 }
 
 fn valid_connect() -> ConnectRequest {
@@ -114,6 +130,7 @@ fn valid_connect() -> ConnectRequest {
             canonical_path: r"C:\Games\game.exe".into(),
             basename: "game.exe".into(),
         }],
+        apps_selective: false,
         killswitch: true,
         allow_lan: false,
     }
@@ -387,4 +404,49 @@ async fn failed_disconnect_cleanup_reports_blocked_error() {
 
     assert_eq!(controller.state().phase, ConnectionPhase::BlockedError);
     assert!(controller.state().network_blocked);
+}
+
+#[tokio::test]
+async fn runtime_audit_keeps_kill_switch_block_when_xray_exits() {
+    let mut backend = RecordingBackend::healthy();
+    backend.active_running = false;
+    backend.keep_blocked_on_failure = true;
+    let mut controller = ConnectionController::connected(backend);
+
+    let state = controller.audit_runtime().await.unwrap();
+
+    assert_eq!(state.phase, ConnectionPhase::Blocked);
+    assert!(state.network_blocked);
+    assert_eq!(
+        controller.backend().effects(),
+        &[Effect::AuditActive, Effect::ClearNetworkBlocked]
+    );
+}
+
+#[tokio::test]
+async fn runtime_audit_opens_network_without_kill_switch_when_xray_exits() {
+    let mut backend = RecordingBackend::healthy();
+    backend.active_running = false;
+    backend.keep_blocked_on_failure = false;
+    let mut controller = ConnectionController::connected(backend);
+
+    let state = controller.audit_runtime().await.unwrap();
+
+    assert_eq!(state.phase, ConnectionPhase::Disconnected);
+    assert!(!state.network_blocked);
+    assert_eq!(
+        controller.backend().effects(),
+        &[Effect::AuditActive, Effect::ClearNetworkOpen]
+    );
+}
+
+#[tokio::test]
+async fn runtime_audit_is_a_noop_outside_connected_state() {
+    let backend = RecordingBackend::healthy();
+    let mut controller = ConnectionController::disconnected(backend);
+
+    let state = controller.audit_runtime().await.unwrap();
+
+    assert_eq!(state.phase, ConnectionPhase::Disconnected);
+    assert!(controller.backend().effects().is_empty());
 }

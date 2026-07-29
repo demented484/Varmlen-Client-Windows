@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use serde_json::Value;
 
@@ -35,9 +38,9 @@ pub struct NativeTunInspection {
     pub dns_servers: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationInspection {
-    pub socks_port: u16,
+    pub socks_ports: Vec<u16>,
 }
 
 pub fn inspect_native_tun_config(config: &str) -> Result<NativeTunInspection, String> {
@@ -132,23 +135,6 @@ pub fn inspect_validation_config(config: &str) -> Result<ValidationInspection, S
         return Err("validation Xray config must not create a TUN adapter".into());
     }
 
-    let socks = inbounds
-        .iter()
-        .find(|inbound| inbound.get("protocol").and_then(Value::as_str) == Some("socks"))
-        .ok_or_else(|| "validation Xray config has no SOCKS inbound".to_string())?;
-    let listen = socks
-        .get("listen")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "validation SOCKS inbound has no listen address".to_string())?;
-    if !matches!(listen, "127.0.0.1" | "::1" | "localhost") {
-        return Err("validation SOCKS inbound must listen on loopback".into());
-    }
-    let port = socks
-        .get("port")
-        .and_then(Value::as_u64)
-        .and_then(|port| u16::try_from(port).ok())
-        .filter(|port| *port != 0)
-        .ok_or_else(|| "validation SOCKS inbound has an invalid port".to_string())?;
     if inbounds.iter().any(|inbound| {
         inbound
             .get("listen")
@@ -157,7 +143,27 @@ pub fn inspect_validation_config(config: &str) -> Result<ValidationInspection, S
     }) {
         return Err("every validation inbound must listen on loopback".into());
     }
-    Ok(ValidationInspection { socks_port: port })
+
+    let socks_ports = inbounds
+        .iter()
+        .filter(|inbound| inbound.get("protocol").and_then(Value::as_str) == Some("socks"))
+        .map(|socks| {
+            socks
+                .get("port")
+                .and_then(Value::as_u64)
+                .and_then(|port| u16::try_from(port).ok())
+                .filter(|port| *port != 0)
+                .ok_or_else(|| "validation SOCKS inbound has an invalid port".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if socks_ports.is_empty() {
+        return Err("validation Xray config has no SOCKS inbound".into());
+    }
+    if socks_ports.iter().copied().collect::<HashSet<_>>().len() != socks_ports.len() {
+        return Err("validation SOCKS inbound ports must be unique".into());
+    }
+
+    Ok(ValidationInspection { socks_ports })
 }
 
 fn parse_object(config: &str, label: &str) -> Result<serde_json::Map<String, Value>, String> {
@@ -326,6 +332,7 @@ pub struct PolicySpec {
     pub allow_lan: bool,
     pub xray_path: PathBuf,
     pub excluded_apps: Vec<PathBuf>,
+    pub apps_selective: bool,
 }
 
 impl PolicySpec {
@@ -420,27 +427,48 @@ impl PolicySpec {
                     }
                     for (index, path) in self.excluded_apps.iter().enumerate() {
                         filters.push(PolicyFilter {
-                            name: format!("permit-excluded-app-{suffix}-{}", index + 1),
+                            name: format!(
+                                "{}-selected-app-{suffix}-{}",
+                                if self.apps_selective {
+                                    "block"
+                                } else {
+                                    "permit"
+                                },
+                                index + 1
+                            ),
                             family,
-                            action: FilterAction::Permit,
+                            action: if self.apps_selective {
+                                FilterAction::Block
+                            } else {
+                                FilterAction::Permit
+                            },
                             weight: EXCLUDED_APP_FILTER_WEIGHT,
-                            conditions: vec![FilterCondition::Application(path.clone())],
+                            conditions: {
+                                let mut conditions =
+                                    vec![FilterCondition::Application(path.clone())];
+                                if self.apps_selective {
+                                    conditions.push(FilterCondition::InterfaceNot(tun_luid));
+                                }
+                                conditions
+                            },
                             persistent: true,
                         });
                     }
-                    filters.push(PolicyFilter {
-                        name: if suffix == "v4" {
-                            "block-outside-tun-v4"
-                        } else {
-                            "block-outside-tun-v6"
-                        }
-                        .into(),
-                        family,
-                        action: FilterAction::Block,
-                        weight: DEFAULT_BLOCK_FILTER_WEIGHT,
-                        conditions: vec![FilterCondition::InterfaceNot(tun_luid)],
-                        persistent: true,
-                    });
+                    if !self.apps_selective {
+                        filters.push(PolicyFilter {
+                            name: if suffix == "v4" {
+                                "block-outside-tun-v4"
+                            } else {
+                                "block-outside-tun-v6"
+                            }
+                            .into(),
+                            family,
+                            action: FilterAction::Block,
+                            weight: DEFAULT_BLOCK_FILTER_WEIGHT,
+                            conditions: vec![FilterCondition::InterfaceNot(tun_luid)],
+                            persistent: true,
+                        });
+                    }
                 }
             }
         }

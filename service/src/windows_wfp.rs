@@ -472,10 +472,9 @@ fn check(status: u32, operation: &str) -> io::Result<()> {
     if status == 0 {
         Ok(())
     } else {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("{operation} failed with WFP status 0x{status:08x}"),
-        ))
+        Err(io::Error::other(format!(
+            "{operation} failed with WFP status 0x{status:08x}"
+        )))
     }
 }
 

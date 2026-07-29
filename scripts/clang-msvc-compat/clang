@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${VARMLEN_REAL_CLANG:?VARMLEN_REAL_CLANG must point to the real clang executable}"
+
+args=()
+translate_imsvc=false
+for arg in "$@"; do
+  if [[ "$translate_imsvc" == "true" ]]; then
+    args+=("-isystem" "$arg")
+    translate_imsvc=false
+  elif [[ "$arg" == "/imsvc" ]]; then
+    translate_imsvc=true
+  else
+    args+=("$arg")
+  fi
+done
+
+if [[ "$translate_imsvc" == "true" ]]; then
+  echo "clang-msvc-compat: /imsvc is missing its include path" >&2
+  exit 2
+fi
+
+exec "$VARMLEN_REAL_CLANG" "${args[@]}"

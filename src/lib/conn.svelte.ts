@@ -68,7 +68,6 @@ class ConnStore {
   private configSig(): string {
     return JSON.stringify({
       server: subs.selectedKey,
-      mode: settings.vpnMode,
       killswitch: settings.killswitch,
       allowLan: settings.allowLan,
       split: splitInput(),
@@ -133,7 +132,6 @@ class ConnStore {
       const resp = await vpnConnect(
         server,
         splitInput(),
-        settings.vpnMode,
         settings.killswitch,
         settings.allowLan,
         settings.logLevel,

@@ -13,8 +13,20 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 serde.workspace = true
+serde_json.workspace = true
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
-tokio = { workspace = true, features = ["net"] }
+tauri-plugin-single-instance = "2"
+tokio = { workspace = true, features = ["net", "time"] }
 varmlen-protocol = { path = "../crates/varmlen-protocol" }
 varmlen-service-core = { path = "../crates/varmlen-service-core" }
+base64 = "0.22"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+percent-encoding = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+thiserror = "2"
+url = "2"
+
+[target.'cfg(windows)'.dependencies]
+rfd = "0.15"
+winreg = "0.55"

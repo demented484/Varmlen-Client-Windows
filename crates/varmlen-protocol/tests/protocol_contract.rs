@@ -16,6 +16,7 @@ fn valid_request() -> RequestEnvelope {
                 canonical_path: r"C:\Games\Counter-Strike 2\game\bin\win64\cs2.exe".into(),
                 basename: "cs2.exe".into(),
             }],
+            apps_selective: false,
             killswitch: true,
             allow_lan: false,
         }),

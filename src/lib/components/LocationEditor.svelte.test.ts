@@ -22,7 +22,7 @@ vi.mock("$lib/api", () => ({
 
 afterEach(cleanup);
 
-describe("Linux location editor content", () => {
+describe("location editor content", () => {
   it("mounts a persisted reactive JSON draft", () => {
     const view = render(LocationEditor, {
       draft: { kind: "json", source: '{\n  "ok": true\n}' },

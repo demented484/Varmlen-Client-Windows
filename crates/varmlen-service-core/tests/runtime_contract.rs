@@ -56,16 +56,24 @@ fn native_tun_requires_dual_stack_routes_and_explicit_dns() {
 #[test]
 fn validation_config_must_only_listen_on_loopback_and_must_not_create_tun() {
     let valid = json!({
-        "inbounds": [{
-            "tag": "validation",
-            "listen": "127.0.0.1",
-            "port": 2081,
-            "protocol": "socks"
-        }]
+        "inbounds": [
+            {
+                "tag": "validation-1",
+                "listen": "127.0.0.1",
+                "port": 2081,
+                "protocol": "socks"
+            },
+            {
+                "tag": "validation-2",
+                "listen": "::1",
+                "port": 2082,
+                "protocol": "socks"
+            }
+        ]
     })
     .to_string();
     let inspected = inspect_validation_config(&valid).expect("loopback validation");
-    assert_eq!(inspected.socks_port, 2081);
+    assert_eq!(inspected.socks_ports, vec![2081, 2082]);
 
     let public_listener = valid.replace("127.0.0.1", "0.0.0.0");
     assert!(inspect_validation_config(&public_listener)
@@ -77,6 +85,11 @@ fn validation_config_must_only_listen_on_loopback_and_must_not_create_tun() {
     })
     .to_string();
     assert!(inspect_validation_config(&tun).unwrap_err().contains("TUN"));
+
+    let duplicate_ports = valid.replace("2082", "2081");
+    assert!(inspect_validation_config(&duplicate_ports)
+        .unwrap_err()
+        .contains("unique"));
 }
 
 #[test]
@@ -121,11 +134,14 @@ fn connected_policy_keeps_dns_above_xray_and_blocks_non_tun_interfaces() {
         allow_lan: true,
         xray_path: PathBuf::from(r"C:\Program Files\Varmlen\xray.exe"),
         excluded_apps: Vec::new(),
+        apps_selective: false,
     };
     let filters = policy.filters();
 
-    assert!(LOOPBACK_FILTER_WEIGHT > DNS_FILTER_WEIGHT);
-    assert!(DNS_FILTER_WEIGHT > XRAY_FILTER_WEIGHT);
+    const {
+        assert!(LOOPBACK_FILTER_WEIGHT > DNS_FILTER_WEIGHT);
+        assert!(DNS_FILTER_WEIGHT > XRAY_FILTER_WEIGHT);
+    }
     assert!(filters.iter().any(|filter| filter.name == "block-dns-v4"));
     assert!(filters.iter().any(|filter| filter.name == "block-dns-v6"));
     assert!(filters
@@ -142,6 +158,7 @@ fn hold_policy_has_no_tun_escape_and_lan_never_bypasses_dns_block() {
         allow_lan: true,
         xray_path: PathBuf::from(r"C:\Program Files\Varmlen\xray.exe"),
         excluded_apps: Vec::new(),
+        apps_selective: false,
     };
     let filters = policy.filters();
 

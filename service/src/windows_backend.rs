@@ -104,6 +104,7 @@ impl WindowsBackend {
                 .iter()
                 .map(|app| PathBuf::from(&app.canonical_path))
                 .collect(),
+            apps_selective: request.apps_selective,
         }
     }
 
@@ -113,6 +114,7 @@ impl WindowsBackend {
             allow_lan: false,
             xray_path: self.layout.xray_executable.clone(),
             excluded_apps: Vec::new(),
+            apps_selective: false,
         }
     }
 }
@@ -270,6 +272,21 @@ impl ConnectionBackend for WindowsBackend {
                 .clear_filters()
                 .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))
         }
+    }
+
+    async fn active_is_running(&mut self) -> Result<bool, ServiceError> {
+        match self.active.as_mut() {
+            Some(process) => process
+                .is_running()
+                .map_err(|error| service_error(ServiceErrorCode::Internal, error)),
+            None => Ok(false),
+        }
+    }
+
+    fn unexpected_failure_keep_blocked(&self) -> bool {
+        self.active_request
+            .as_ref()
+            .is_some_and(|request| request.killswitch)
     }
 }
 

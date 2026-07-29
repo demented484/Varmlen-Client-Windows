@@ -14,6 +14,12 @@ pub trait ConnectionBackend {
     async fn release_transition_hold(&mut self) -> Result<(), ServiceError>;
     async fn restore_previous(&mut self) -> Result<(), ServiceError>;
     async fn clear_network_state(&mut self, keep_blocked: bool) -> Result<(), ServiceError>;
+    async fn active_is_running(&mut self) -> Result<bool, ServiceError> {
+        Ok(true)
+    }
+    fn unexpected_failure_keep_blocked(&self) -> bool {
+        true
+    }
 }
 
 pub struct ConnectionController<B> {
@@ -65,7 +71,35 @@ impl<B> ConnectionController<B> {
     }
 }
 
-impl<B: ConnectionBackend> ConnectionController<B> {
+impl<B: ConnectionBackend + Send> ConnectionController<B> {
+    pub async fn audit_runtime(&mut self) -> Result<ServiceState, ServiceError> {
+        if self.state.phase != ConnectionPhase::Connected {
+            return Ok(self.state.clone());
+        }
+        if self.backend.active_is_running().await? {
+            return Ok(self.state.clone());
+        }
+
+        let operation_id = self.state.operation_id;
+        let keep_blocked = self.backend.unexpected_failure_keep_blocked();
+        if let Err(error) = self.backend.clear_network_state(keep_blocked).await {
+            self.state = blocked_error_state(operation_id);
+            return Err(error);
+        }
+        self.state = ServiceState {
+            phase: if keep_blocked {
+                ConnectionPhase::Blocked
+            } else {
+                ConnectionPhase::Disconnected
+            },
+            operation_id,
+            split_active: false,
+            dns_protected: false,
+            network_blocked: keep_blocked,
+        };
+        Ok(self.state.clone())
+    }
+
     async fn recover_candidate_failure(
         &mut self,
         operation_id: u64,

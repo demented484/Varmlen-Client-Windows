@@ -514,7 +514,11 @@
 
         {#if infoFor.supportUrl}
           <dt>{t("info.support")}</dt>
-          <dd><a href={infoFor.supportUrl} target="_blank" rel="noopener">{infoFor.supportUrl}</a></dd>
+          <dd>
+            <button type="button" class="external-link" onclick={() => open(infoFor?.supportUrl ?? null)}>
+              {infoFor.supportUrl}
+            </button>
+          </dd>
         {/if}
       </dl>
       {#if infoFor.description}
@@ -1048,9 +1052,16 @@
     word-break: break-all;
     font-size: 13px;
   }
-  .info-grid a {
+  .external-link {
+    appearance: none;
+    padding: 0;
+    border: 0;
+    background: transparent;
     color: var(--accent);
     text-decoration: underline;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
   }
   .mono {
     font-family: ui-monospace, "JetBrains Mono", monospace;

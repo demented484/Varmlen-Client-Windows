@@ -1,55 +1,13 @@
 <script lang="ts">
-  import { onDestroy, tick } from "svelte";
+  import { tick } from "svelte";
   import { split, type Mode } from "$lib/split.svelte";
-  import { settings } from "$lib/settings.svelte";
-  import { appSplitAvailable } from "$lib/split-availability";
   import { listInstalledApps, appFromFile, pickFile, type InstalledApp } from "$lib/api";
   import { t } from "$lib/i18n.svelte";
   import { isAndroid } from "$lib/platform";
   import Dropdown from "$lib/components/Dropdown.svelte";
 
   type Tab = "apps" | "websites";
-  let tab = $state<Tab>(
-    appSplitAvailable(settings.vpnMode) ? "apps" : "websites",
-  );
-  const appsAvailable = $derived(appSplitAvailable(settings.vpnMode));
-  let showAppsUnavailable = $state(false);
-  let noticeTimer: ReturnType<typeof setTimeout> | undefined;
-
-  function hideAppsUnavailableNotice(): void {
-    if (noticeTimer !== undefined) clearTimeout(noticeTimer);
-    noticeTimer = undefined;
-    showAppsUnavailable = false;
-  }
-
-  function showAppsUnavailableNotice(): void {
-    if (noticeTimer !== undefined) clearTimeout(noticeTimer);
-    showAppsUnavailable = true;
-    noticeTimer = setTimeout(() => {
-      showAppsUnavailable = false;
-      noticeTimer = undefined;
-    }, 3000);
-  }
-
-  function requestAppsTab(event: Event): void {
-    if (!appsAvailable) {
-      showAppsUnavailableNotice();
-      return;
-    }
-    if (event.type === "click") tab = "apps";
-  }
-
-  function selectWebsitesTab(): void {
-    tab = "websites";
-    hideAppsUnavailableNotice();
-  }
-
-  $effect(() => {
-    if (!appsAvailable && tab === "apps") tab = "websites";
-    if (appsAvailable) hideAppsUnavailableNotice();
-  });
-
-  onDestroy(hideAppsUnavailableNotice);
+  let tab = $state<Tab>("apps");
 
   const modeOptions = $derived([
     { value: "general", label: t("split.modeGeneral") },
@@ -159,27 +117,17 @@
   <div class="segmented" role="tablist">
     <button
       class:active={tab === "apps"}
-      class:unavailable={!appsAvailable}
-      onclick={requestAppsTab}
-      onmouseenter={requestAppsTab}
-      onfocus={requestAppsTab}
+      onclick={() => (tab = "apps")}
       role="tab"
       aria-selected={tab === "apps"}
-      aria-disabled={!appsAvailable}
     >{t("split.apps")}</button>
     <button
       class:active={tab === "websites"}
-      onclick={selectWebsitesTab}
+      onclick={() => (tab = "websites")}
       role="tab"
       aria-selected={tab === "websites"}
     >{t("split.websites")}</button>
   </div>
-
-  {#if showAppsUnavailable}
-    <div class="split-unavailable" role="status" aria-live="polite">
-      {t("split.appsProxyUnavailable")}
-    </div>
-  {/if}
 
   <div class="card mode">
     <div class="mode-top">
@@ -372,23 +320,6 @@
   }
   .segmented :global(button) {
     flex: 1;
-  }
-  .segmented :global(button.unavailable) {
-    color: var(--text-muted);
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-  .segmented :global(button.unavailable:hover),
-  .segmented :global(button.unavailable:focus-visible) {
-    color: var(--text-muted);
-  }
-  .split-unavailable {
-    padding: 10px 12px;
-    border-radius: var(--radius-sm);
-    background: var(--bg-elev-2);
-    color: var(--text-muted);
-    font-size: 12px;
-    line-height: 1.4;
   }
   .small {
     font-size: 11px;

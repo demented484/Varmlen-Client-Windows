@@ -1,6 +1,6 @@
 <script lang="ts">
   import { theme } from "$lib/theme.svelte";
-  import { settings, type VpnMode, type PingMethod, type LogLevel } from "$lib/settings.svelte";
+  import { settings, type LogLevel } from "$lib/settings.svelte";
   import type { SubscriptionUserAgent } from "$lib/subscription-user-agent";
   import { i18n, t, LANGUAGES, type Lang } from "$lib/i18n.svelte";
   import { core } from "$lib/core.svelte";
@@ -145,17 +145,6 @@
     }
   }
 
-  const modeOptions = $derived([
-    { value: "tun", label: t("mode.tun") },
-    { value: "proxy", label: t("mode.proxy") },
-  ]);
-  const modeSub = $derived(settings.vpnMode === "proxy" ? t("mode.proxySub") : t("mode.tunSub"));
-
-  const pingOptions = $derived([
-    { value: "tcp", label: t("ping.tcp") },
-    { value: "proxy", label: t("ping.proxy") },
-  ]);
-
   const subscriptionUaOptions = [
     { value: "varmlen", label: "Varmlen" },
     { value: "happ", label: "Happ" },
@@ -268,24 +257,6 @@
   </section>
 
   <section>
-    <h2>{t("settings.vpnMode")}</h2>
-    <div class="list">
-      <div class="row">
-        <div class="row-text">
-          <div class="row-title">{t("settings.vpnMode")}</div>
-          <div class="row-sub muted">{modeSub}</div>
-        </div>
-        <Dropdown
-          value={settings.vpnMode}
-          options={modeOptions}
-          onChange={(v) => settings.setVpnMode(v as VpnMode)}
-          ariaLabel={t("settings.vpnMode")}
-        />
-      </div>
-    </div>
-  </section>
-
-  <section>
     <h2>{t("settings.general")}</h2>
     <div class="list">
       <div class="row">
@@ -373,18 +344,6 @@
         </span>
       </label>
       {/if}
-      <div class="row">
-        <div class="row-text">
-          <div class="row-title">{t("settings.pingMethod")}</div>
-          <div class="row-sub muted">{t("settings.pingMethodSub")}</div>
-        </div>
-        <Dropdown
-          value={settings.pingMethod}
-          options={pingOptions}
-          onChange={(v) => settings.setPingMethod(v as PingMethod)}
-          ariaLabel={t("settings.pingMethod")}
-        />
-      </div>
       <div class="row">
         <div class="row-text">
           <div class="row-title">{t("settings.subscriptionUa")}</div>

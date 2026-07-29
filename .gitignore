@@ -6,6 +6,7 @@ target/
 .svelte-kit/
 src-tauri/gen/
 src-tauri/cores/
+src-tauri/windows/runtime/
 *.pdb
 *.msi
 *.msix

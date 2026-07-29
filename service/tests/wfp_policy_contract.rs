@@ -9,6 +9,7 @@ fn spec(mode: PolicyMode, allow_lan: bool) -> PolicySpec {
         allow_lan,
         xray_path: PathBuf::from(r"C:\Program Files\Varmlen\xray.exe"),
         excluded_apps: Vec::new(),
+        apps_selective: false,
     }
 }
 
@@ -86,7 +87,7 @@ fn excluded_app_is_permitted_below_dns_block_and_above_default_block() {
 
     let app_rules = rules
         .iter()
-        .filter(|rule| rule.name.starts_with("permit-excluded-app-"))
+        .filter(|rule| rule.name.starts_with("permit-selected-app-"))
         .collect::<Vec<_>>();
     assert_eq!(app_rules.len(), 2, "one rule per IP family");
     assert!(app_rules.iter().all(|rule| {
@@ -100,4 +101,27 @@ fn excluded_app_is_permitted_below_dns_block_and_above_default_block() {
                 )
             })
     }));
+}
+
+#[test]
+fn selective_mode_blocks_only_selected_apps_from_bypassing_tun() {
+    let mut policy = spec(PolicyMode::Connected { tun_luid: 77 }, false);
+    policy.apps_selective = true;
+    policy.excluded_apps = vec![PathBuf::from(r"C:\Apps\browser.exe")];
+    let rules = compile_policy(&policy).expect("policy compiles");
+
+    let selected = rules
+        .iter()
+        .filter(|rule| rule.name.starts_with("block-selected-app-"))
+        .collect::<Vec<_>>();
+    assert_eq!(selected.len(), 2);
+    assert!(selected.iter().all(|rule| {
+        rule.action == varmlen_service_core::runtime::FilterAction::Block
+            && rule
+                .conditions
+                .contains(&CompiledCondition::InterfaceNot(77))
+    }));
+    assert!(!rules
+        .iter()
+        .any(|rule| rule.name.starts_with("block-outside-tun")));
 }

@@ -113,7 +113,16 @@
 {#if draft.kind === "json"}
   <label class="json-field">
     <span>{t("location.json")}</span>
-    <textarea class="json-editor" bind:value={draft.source} spellcheck="false"></textarea>
+    <textarea
+      class="json-editor"
+      value={draft.source}
+      oninput={(event) => {
+        if (draft.kind === "json") {
+          draft.source = (event.currentTarget as HTMLTextAreaElement).value;
+        }
+      }}
+      spellcheck="false"
+    ></textarea>
   </label>
 {:else}
   <div class="fields-grid">

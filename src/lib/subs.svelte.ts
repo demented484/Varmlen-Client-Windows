@@ -7,11 +7,10 @@ import {
   formatBytes,
   formatExpires,
   tcpPingHost,
-  proxyGetPing,
   type ImportResult,
   type VlessServer,
 } from "$lib/api";
-import { settings, type PingMethod } from "$lib/settings.svelte";
+import { settings } from "$lib/settings.svelte";
 import { isRemoteSource } from "$lib/subscription-json";
 import {
   isRemoteConfiguration,
@@ -669,15 +668,12 @@ class SubsStore {
     this.pings = pruned;
   }
 
-  /** Probe one server with the user's chosen method (TCP or via-proxy real
-   *  delay). Updates `pings[id]` in place; never throws. */
-  async pingServer(srv: ServerEntry, method: PingMethod = settings.pingMethod): Promise<void> {
+  /** Probe one server with a bounded TCP connect. Updates `pings[id]` in
+   * place and never throws. */
+  async pingServer(srv: ServerEntry): Promise<void> {
     this.pings = { ...this.pings, [srv.id]: "pinging" };
     try {
-      const rtt =
-        method === "proxy"
-          ? await proxyGetPing(srv.raw, 5000)
-          : await tcpPingHost(srv.raw.host, srv.raw.port, 2500);
+      const rtt = await tcpPingHost(srv.raw.host, srv.raw.port, 2500);
       this.pings = { ...this.pings, [srv.id]: rtt };
     } catch {
       this.pings = { ...this.pings, [srv.id]: "timeout" };
@@ -689,15 +685,12 @@ class SubsStore {
    *  so an additional frontend queue makes large subscriptions unnecessarily
    *  slow. The method is captured once for a consistent batch. */
   private async pingMany(servers: ServerEntry[]): Promise<void> {
-    const method = settings.pingMethod;
     // Mark the whole batch in-flight up front so every old result clears at
     // once instead of one-by-one as the probes finish.
     const next = { ...this.pings };
     for (const s of servers) next[s.id] = "pinging";
     this.pings = next;
-    await runPingsInParallel(servers, (server) =>
-      this.pingServer(server, method),
-    );
+    await runPingsInParallel(servers, (server) => this.pingServer(server));
   }
 
   /** Probe every server across every subscription. Safe to call while one is

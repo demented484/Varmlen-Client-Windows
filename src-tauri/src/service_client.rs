@@ -4,19 +4,31 @@ mod platform {
 
     use tokio::{io::AsyncWriteExt, net::windows::named_pipe::ClientOptions};
     use varmlen_protocol::{
-        decode_response, encode_payload, RequestEnvelope, ServiceCommand, ServiceState,
-        PROTOCOL_VERSION, SERVICE_PIPE_NAME,
+        decode_response, encode_payload, ConnectRequest, RequestEnvelope, ServiceCommand,
+        ServiceState, PROTOCOL_VERSION, SERVICE_PIPE_NAME,
     };
     use varmlen_service_core::framing::{read_payload, write_payload};
 
     static NEXT_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
 
     pub async fn service_status() -> Result<ServiceState, String> {
+        request(ServiceCommand::Status).await
+    }
+
+    pub async fn connect(request_body: ConnectRequest) -> Result<ServiceState, String> {
+        request(ServiceCommand::Connect(request_body)).await
+    }
+
+    pub async fn disconnect(keep_blocked: bool) -> Result<ServiceState, String> {
+        request(ServiceCommand::Disconnect { keep_blocked }).await
+    }
+
+    async fn request(command: ServiceCommand) -> Result<ServiceState, String> {
         let operation_id = NEXT_OPERATION_ID.fetch_add(1, Ordering::Relaxed);
         let request = RequestEnvelope {
             version: PROTOCOL_VERSION,
             operation_id,
-            command: ServiceCommand::Status,
+            command,
         };
         let request = encode_payload(&request)
             .map_err(|error| format!("failed to encode service request: {error:?}"))?;
@@ -47,11 +59,19 @@ mod platform {
 
 #[cfg(not(windows))]
 mod platform {
-    use varmlen_protocol::ServiceState;
+    use varmlen_protocol::{ConnectRequest, ServiceState};
 
     pub async fn service_status() -> Result<ServiceState, String> {
         Err("VarmlenService is only supported on Windows".into())
     }
+
+    pub async fn connect(_request: ConnectRequest) -> Result<ServiceState, String> {
+        Err("VarmlenService is only supported on Windows".into())
+    }
+
+    pub async fn disconnect(_keep_blocked: bool) -> Result<ServiceState, String> {
+        Err("VarmlenService is only supported on Windows".into())
+    }
 }
 
-pub use platform::service_status;
+pub use platform::{connect, disconnect, service_status};

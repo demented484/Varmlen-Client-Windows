@@ -1,0 +1,11 @@
+{
+  "bundle": {
+    "resources": {
+      "../target/aarch64-pc-windows-msvc/release/varmlen-service.exe": "varmlen-service.exe",
+      "windows/runtime/arm64/xray.exe": "xray.exe",
+      "windows/runtime/arm64/wintun.dll": "wintun.dll",
+      "windows/runtime/arm64/geoip.dat": "geoip.dat",
+      "windows/runtime/arm64/geosite.dat": "geosite.dat"
+    }
+  }
+}

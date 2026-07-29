@@ -7,6 +7,7 @@ use tokio::{
     net::windows::named_pipe::{NamedPipeServer, ServerOptions},
     sync::{watch, Mutex},
     task::JoinSet,
+    time::{interval, MissedTickBehavior},
 };
 use varmlen_protocol::{
     ServiceCommand, ServiceError, ServiceErrorCode, ServiceState, MAX_FRAME_BYTES,
@@ -121,6 +122,7 @@ impl CommandExecutor for RuntimeExecutor {
 pub async fn run_pipe_host(mut shutdown: watch::Receiver<bool>) -> io::Result<()> {
     let installed_user = Arc::new(load_installed_user_sid()?);
     let executor = Arc::new(RuntimeExecutor::open().await?);
+    let monitor = tokio::spawn(run_runtime_monitor(Arc::clone(&executor), shutdown.clone()));
     let mut clients = JoinSet::new();
     let mut listener = create_pipe_server(&installed_user, true)?;
 
@@ -148,7 +150,27 @@ pub async fn run_pipe_host(mut shutdown: watch::Receiver<bool>) -> io::Result<()
 
     drop(listener);
     clients.shutdown().await;
+    monitor.abort();
+    let _ = monitor.await;
     Ok(())
+}
+
+async fn run_runtime_monitor(executor: Arc<RuntimeExecutor>, mut shutdown: watch::Receiver<bool>) {
+    let mut ticks = interval(std::time::Duration::from_millis(500));
+    ticks.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            _ = ticks.tick() => {
+                let mut controller = executor.controller.lock().await;
+                let _ = controller.audit_runtime().await;
+            }
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return;
+                }
+            }
+        }
+    }
 }
 
 fn create_pipe_server(

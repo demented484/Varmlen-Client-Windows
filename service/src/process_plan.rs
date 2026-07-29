@@ -39,3 +39,40 @@ impl XrayInvocation {
         }
     }
 }
+
+pub fn socks5_ipv4_connect_request(address: [u8; 4], port: u16) -> [u8; 10] {
+    let [port_high, port_low] = port.to_be_bytes();
+    [
+        5, 1, 0, 1, address[0], address[1], address[2], address[3], port_high, port_low,
+    ]
+}
+
+pub fn validate_socks5_method_reply(reply: [u8; 2]) -> Result<(), String> {
+    if reply == [5, 0] {
+        Ok(())
+    } else {
+        Err(format!(
+            "SOCKS5 proxy rejected no-auth negotiation: {reply:02x?}"
+        ))
+    }
+}
+
+pub fn validate_socks5_connect_header(header: [u8; 4]) -> Result<usize, String> {
+    if header[0] != 5 || header[2] != 0 {
+        return Err(format!("invalid SOCKS5 CONNECT response: {header:02x?}"));
+    }
+    if header[1] != 0 {
+        return Err(format!(
+            "SOCKS5 CONNECT failed with status 0x{:02x}",
+            header[1]
+        ));
+    }
+    match header[3] {
+        1 => Ok(6),
+        4 => Ok(18),
+        3 => Ok(0),
+        address_type => Err(format!(
+            "SOCKS5 CONNECT returned unknown address type 0x{address_type:02x}"
+        )),
+    }
+}

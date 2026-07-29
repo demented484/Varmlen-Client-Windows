@@ -1,23 +1,44 @@
 use std::{
     fs::{self, OpenOptions},
     io,
+    mem::size_of,
     process::Stdio,
     time::Duration,
 };
 
 use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
     process::{Child, Command},
-    time::timeout,
+    task::JoinSet,
+    time::{sleep, timeout, Instant},
 };
-use varmlen_service_core::runtime::RuntimeLayout;
-use windows::Win32::System::Threading::CREATE_NO_WINDOW;
+use varmlen_service_core::runtime::{inspect_validation_config, RuntimeLayout};
+use windows::{
+    core::PCWSTR,
+    Win32::{
+        Foundation::{CloseHandle, HANDLE},
+        System::{
+            JobObjects::{
+                AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+                SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            },
+            Threading::CREATE_NO_WINDOW,
+        },
+    },
+};
 
 use crate::{
-    process_plan::XrayInvocation,
+    process_plan::{
+        socks5_ipv4_connect_request, validate_socks5_connect_header, validate_socks5_method_reply,
+        XrayInvocation,
+    },
     windows_state::{atomic_write, ensure_state_directory},
 };
 
 pub struct ManagedXray {
+    _job: OwnedJob,
     child: Child,
 }
 
@@ -40,8 +61,10 @@ impl ManagedXray {
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(log_error))
             .kill_on_drop(true);
+        let job = OwnedJob::new()?;
         let child = command.spawn()?;
-        Ok(Self { child })
+        job.assign(&child)?;
+        Ok(Self { _job: job, child })
     }
 
     pub fn is_running(&mut self) -> io::Result<bool> {
@@ -66,7 +89,33 @@ impl Drop for ManagedXray {
 pub async fn validate_config(layout: &RuntimeLayout, config: &str) -> io::Result<()> {
     ensure_runtime_assets(layout)?;
     ensure_state_directory(layout)?;
+    let inspection = inspect_validation_config(config)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     atomic_write(&layout.validation_config, config.as_bytes())?;
+    validate_config_syntax(layout).await?;
+
+    let invocation = XrayInvocation::run(
+        layout.xray_executable.clone(),
+        layout.validation_config.clone(),
+    );
+    let mut command = command_for(&invocation);
+    command
+        .current_dir(&layout.install_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let job = OwnedJob::new()?;
+    let mut child = command.spawn()?;
+    job.assign(&child)?;
+
+    let probe_result = wait_for_socks_reachability(&mut child, &inspection.socks_ports).await;
+    stop_child(&mut child).await;
+    drop(job);
+    probe_result
+}
+
+async fn validate_config_syntax(layout: &RuntimeLayout) -> io::Result<()> {
     let invocation = XrayInvocation::validation(
         layout.xray_executable.clone(),
         layout.validation_config.clone(),
@@ -89,6 +138,84 @@ pub async fn validate_config(layout: &RuntimeLayout, config: &str) -> io::Result
         io::ErrorKind::InvalidData,
         format!("Xray rejected the configuration: {stderr}{stdout}"),
     ))
+}
+
+async fn wait_for_socks_reachability(child: &mut Child, ports: &[u16]) -> io::Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last_error = "validation proxy did not accept a connection".to_string();
+
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Err(io::Error::other(format!(
+                "validation Xray exited before a proxy path became reachable: {status}"
+            )));
+        }
+
+        let mut probes = JoinSet::new();
+        for port in ports.iter().copied() {
+            probes.spawn(async move {
+                timeout(Duration::from_secs(3), probe_socks5(port))
+                    .await
+                    .map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            format!("SOCKS5 validation timed out on port {port}"),
+                        )
+                    })?
+            });
+        }
+        while let Some(result) = probes.join_next().await {
+            match result {
+                Ok(Ok(())) => {
+                    probes.abort_all();
+                    return Ok(());
+                }
+                Ok(Err(error)) => last_error = error.to_string(),
+                Err(error) => last_error = format!("SOCKS5 validation task failed: {error}"),
+            }
+        }
+
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("no validation proxy path became reachable: {last_error}"),
+            ));
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn probe_socks5(port: u16) -> io::Result<()> {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).await?;
+    stream.write_all(&[5, 1, 0]).await?;
+    let mut method = [0u8; 2];
+    stream.read_exact(&mut method).await?;
+    validate_socks5_method_reply(method)
+        .map_err(|error| io::Error::new(io::ErrorKind::ConnectionRefused, error))?;
+
+    stream
+        .write_all(&socks5_ipv4_connect_request([1, 1, 1, 1], 443))
+        .await?;
+    let mut header = [0u8; 4];
+    stream.read_exact(&mut header).await?;
+    let tail_len = validate_socks5_connect_header(header)
+        .map_err(|error| io::Error::new(io::ErrorKind::ConnectionRefused, error))?;
+    if tail_len == 0 {
+        let domain_len = stream.read_u8().await? as usize;
+        let mut tail = vec![0u8; domain_len + 2];
+        stream.read_exact(&mut tail).await?;
+    } else {
+        let mut tail = vec![0u8; tail_len];
+        stream.read_exact(&mut tail).await?;
+    }
+    Ok(())
+}
+
+async fn stop_child(child: &mut Child) {
+    if child.try_wait().ok().flatten().is_none() {
+        let _ = child.kill().await;
+        let _ = timeout(Duration::from_secs(3), child.wait()).await;
+    }
 }
 
 pub fn ensure_runtime_assets(layout: &RuntimeLayout) -> io::Result<()> {
@@ -115,3 +242,52 @@ fn command_for(invocation: &XrayInvocation) -> Command {
     command.creation_flags(CREATE_NO_WINDOW.0);
     command
 }
+
+struct OwnedJob(HANDLE);
+
+impl OwnedJob {
+    fn new() -> io::Result<Self> {
+        // SAFETY: no custom security descriptor or shared job name is used.
+        let handle = unsafe { CreateJobObjectW(None, PCWSTR::null()) }.map_err(io::Error::other)?;
+        let job = Self(handle);
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // SAFETY: `limits` has the exact structure and size required by
+        // JobObjectExtendedLimitInformation and remains alive for the call.
+        unsafe {
+            SetInformationJobObject(
+                job.0,
+                JobObjectExtendedLimitInformation,
+                std::ptr::from_ref(&limits).cast(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        }
+        .map_err(io::Error::other)?;
+        Ok(job)
+    }
+
+    fn assign(&self, child: &Child) -> io::Result<()> {
+        let process = HANDLE(
+            child
+                .raw_handle()
+                .ok_or_else(|| io::Error::other("spawned Xray has no process handle"))?,
+        );
+        // SAFETY: both handles are valid and owned for at least this call.
+        unsafe { AssignProcessToJobObject(self.0, process) }.map_err(io::Error::other)
+    }
+}
+
+impl Drop for OwnedJob {
+    fn drop(&mut self) {
+        if !self.0.is_invalid() {
+            // SAFETY: this guard exclusively owns the job handle.
+            let _ = unsafe { CloseHandle(self.0) };
+        }
+    }
+}
+
+// Windows job handles are process-wide kernel handles. Transferring or sharing
+// this owning guard across worker threads does not invalidate the handle; all
+// access is through thread-safe Win32 handle operations.
+unsafe impl Send for OwnedJob {}
+unsafe impl Sync for OwnedJob {}

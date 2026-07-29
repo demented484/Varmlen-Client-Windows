@@ -4,7 +4,10 @@ use varmlen_protocol::{
     AppSelector, ConnectRequest, RequestEnvelope, ServiceCommand, PROTOCOL_VERSION,
 };
 use varmlen_service::{
-    process_plan::{XrayInvocation, XrayInvocationKind},
+    process_plan::{
+        socks5_ipv4_connect_request, validate_socks5_connect_header, validate_socks5_method_reply,
+        XrayInvocation, XrayInvocationKind,
+    },
     state_record::{decode_desired_state, encode_desired_state, DesiredStateRecord},
 };
 
@@ -17,9 +20,29 @@ fn request() -> ConnectRequest {
             canonical_path: r"C:\Games\Counter-Strike 2\game\bin\win64\cs2.exe".into(),
             basename: "cs2.exe".into(),
         }],
+        apps_selective: false,
         killswitch: true,
         allow_lan: false,
     }
+}
+
+#[test]
+fn validation_probe_uses_a_no_auth_socks5_connect_request() {
+    assert_eq!(
+        socks5_ipv4_connect_request([1, 1, 1, 1], 443),
+        [5, 1, 0, 1, 1, 1, 1, 1, 1, 187]
+    );
+    assert!(validate_socks5_method_reply([5, 0]).is_ok());
+    assert!(validate_socks5_method_reply([5, 2]).is_err());
+    assert_eq!(
+        validate_socks5_connect_header([5, 0, 0, 1]).expect("IPv4 reply"),
+        6
+    );
+    assert_eq!(
+        validate_socks5_connect_header([5, 0, 0, 4]).expect("IPv6 reply"),
+        18
+    );
+    assert!(validate_socks5_connect_header([5, 4, 0, 1]).is_err());
 }
 
 #[test]

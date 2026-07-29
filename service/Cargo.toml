@@ -27,6 +27,7 @@ windows = { version = "0.62.2", features = [
   "Win32_Security_Cryptography",
   "Win32_Storage_FileSystem",
   "Win32_System_Memory",
+  "Win32_System_JobObjects",
   "Win32_System_Pipes",
   "Win32_System_Rpc",
   "Win32_System_Threading",

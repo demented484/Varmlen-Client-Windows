@@ -117,7 +117,6 @@
   // while connected. Reading these here registers them as effect dependencies.
   $effect(() => {
     void subs.selectedKey;
-    void settings.vpnMode;
     void settings.killswitch;
     void settings.allowLan;
     void split.appsMode;
