@@ -4044,6 +4044,8 @@ name = "varmlen-service"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "serde",
+ "serde_json",
  "tokio",
  "varmlen-protocol",
  "varmlen-service-core",

@@ -6,7 +6,11 @@ use varmlen_protocol::{
 
 #[async_trait]
 pub trait CommandExecutor: Send + Sync {
-    async fn execute(&self, command: ServiceCommand) -> Result<ServiceState, ServiceError>;
+    async fn execute(
+        &self,
+        operation_id: u64,
+        command: ServiceCommand,
+    ) -> Result<ServiceState, ServiceError>;
 }
 
 pub async fn handle_payload<E>(executor: &E, payload: &[u8]) -> Result<Vec<u8>, ServiceErrorCode>
@@ -26,7 +30,9 @@ where
     let response = ResponseEnvelope {
         version: PROTOCOL_VERSION,
         operation_id: request.operation_id,
-        result: executor.execute(request.command).await,
+        result: executor
+            .execute(request.operation_id, request.command)
+            .await,
     };
     encode_payload(&response)
 }

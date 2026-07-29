@@ -9,6 +9,8 @@ name = "varmlen_service"
 
 [dependencies]
 async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, features = ["net", "signal"] }
 varmlen-protocol = { path = "../crates/varmlen-protocol" }
 varmlen-service-core = { path = "../crates/varmlen-service-core" }

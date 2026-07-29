@@ -89,7 +89,11 @@ impl SnapshotExecutor {
 
 #[async_trait]
 impl CommandExecutor for SnapshotExecutor {
-    async fn execute(&self, command: ServiceCommand) -> Result<ServiceState, ServiceError> {
+    async fn execute(
+        &self,
+        _operation_id: u64,
+        command: ServiceCommand,
+    ) -> Result<ServiceState, ServiceError> {
         match command {
             ServiceCommand::Status => {
                 self.state.read().map(|state| state.clone()).map_err(|_| {
