@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL_VERSION: u16 = 1;
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
+pub const SERVICE_PIPE_NAME: &str = r"\\.\pipe\Varmlen\Service\v1";
 const MAX_CONFIG_BYTES: usize = 384 * 1024;
 const MAX_SERVER_ENDPOINTS: usize = 64;
 const MAX_EXCLUDED_APPS: usize = 256;

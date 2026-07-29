@@ -3,6 +3,7 @@ members = [
   "crates/varmlen-protocol",
   "crates/varmlen-service-core",
   "service",
+  "src-tauri",
 ]
 resolver = "2"
 

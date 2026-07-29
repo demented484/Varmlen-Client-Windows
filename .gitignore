@@ -4,6 +4,7 @@ build/
 dist/
 target/
 .svelte-kit/
+src-tauri/gen/
 src-tauri/cores/
 *.pdb
 *.msi
