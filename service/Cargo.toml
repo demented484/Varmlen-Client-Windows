@@ -11,17 +11,24 @@ name = "varmlen_service"
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["net", "signal"] }
+tokio = { workspace = true, features = ["fs", "net", "process", "signal", "time"] }
 varmlen-protocol = { path = "../crates/varmlen-protocol" }
 varmlen-service-core = { path = "../crates/varmlen-service-core" }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [
   "Win32_Foundation",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_NetworkManagement_Ndis",
+  "Win32_NetworkManagement_WindowsFilteringPlatform",
+  "Win32_Networking_WinSock",
   "Win32_Security",
   "Win32_Security_Authorization",
+  "Win32_Security_Cryptography",
   "Win32_Storage_FileSystem",
+  "Win32_System_Memory",
   "Win32_System_Pipes",
+  "Win32_System_Rpc",
   "Win32_System_Threading",
 ] }
 windows-service = "0.8.1"

@@ -8,6 +8,7 @@ fn spec(mode: PolicyMode, allow_lan: bool) -> PolicySpec {
         mode,
         allow_lan,
         xray_path: PathBuf::from(r"C:\Program Files\Varmlen\xray.exe"),
+        excluded_apps: Vec::new(),
     }
 }
 
@@ -48,6 +49,9 @@ fn every_family_has_dns_block_above_xray_permit() {
         assert!(dns.weight > xray.weight);
         assert!(dns.conditions.contains(&CompiledCondition::RemotePort(53)));
         assert!(dns.conditions.contains(&CompiledCondition::NotLoopback));
+        assert!(dns
+            .conditions
+            .contains(&CompiledCondition::InterfaceNot(12)));
     }
 }
 
@@ -72,4 +76,28 @@ fn lan_networks_expand_to_independent_filters_but_not_in_hold_mode() {
     assert!(!hold.iter().any(|rule| rule.name.starts_with("permit-lan")));
     assert!(hold.iter().any(|rule| rule.name == "block-all-v4"));
     assert!(hold.iter().any(|rule| rule.name == "block-all-v6"));
+}
+
+#[test]
+fn excluded_app_is_permitted_below_dns_block_and_above_default_block() {
+    let mut policy = spec(PolicyMode::Connected { tun_luid: 42 }, false);
+    policy.excluded_apps = vec![PathBuf::from(r"C:\Games\Counter-Strike 2\cs2.exe")];
+    let rules = compile_policy(&policy).expect("policy compiles");
+
+    let app_rules = rules
+        .iter()
+        .filter(|rule| rule.name.starts_with("permit-excluded-app-"))
+        .collect::<Vec<_>>();
+    assert_eq!(app_rules.len(), 2, "one rule per IP family");
+    assert!(app_rules.iter().all(|rule| {
+        rule.weight < varmlen_service_core::runtime::DNS_FILTER_WEIGHT
+            && rule.weight > varmlen_service_core::runtime::DEFAULT_BLOCK_FILTER_WEIGHT
+            && rule.conditions.iter().any(|condition| {
+                matches!(
+                    condition,
+                    CompiledCondition::Application(path)
+                        if path.to_string_lossy().ends_with(r"\cs2.exe")
+                )
+            })
+    }));
 }

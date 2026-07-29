@@ -9,4 +9,14 @@ pub use varmlen_protocol::SERVICE_PIPE_NAME as PIPE_NAME;
 #[cfg(windows)]
 pub mod pipe;
 #[cfg(windows)]
+pub mod windows_adapter;
+#[cfg(windows)]
+pub mod windows_backend;
+#[cfg(windows)]
+pub mod windows_process;
+#[cfg(windows)]
 pub mod windows_service;
+#[cfg(windows)]
+pub mod windows_state;
+#[cfg(windows)]
+pub mod windows_wfp;

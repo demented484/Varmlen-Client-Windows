@@ -6,6 +6,7 @@ pub const LOOPBACK_FILTER_WEIGHT: u64 = 0xff;
 pub const DNS_FILTER_WEIGHT: u64 = 0xfe;
 pub const XRAY_FILTER_WEIGHT: u64 = 0xfd;
 pub const LAN_FILTER_WEIGHT: u64 = 0xfc;
+pub const EXCLUDED_APP_FILTER_WEIGHT: u64 = 0xfb;
 pub const DEFAULT_BLOCK_FILTER_WEIGHT: u64 = 0x10;
 
 pub const TUN_ADAPTER_NAME: &str = "Varmlen";
@@ -305,7 +306,7 @@ pub enum FilterCondition {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyFilter {
-    pub name: &'static str,
+    pub name: String,
     pub family: IpFamily,
     pub action: FilterAction,
     pub weight: u64,
@@ -324,18 +325,27 @@ pub struct PolicySpec {
     pub mode: PolicyMode,
     pub allow_lan: bool,
     pub xray_path: PathBuf,
+    pub excluded_apps: Vec<PathBuf>,
 }
 
 impl PolicySpec {
     pub fn filters(&self) -> Vec<PolicyFilter> {
         let mut filters = Vec::new();
         for (family, suffix) in [(IpFamily::V4, "v4"), (IpFamily::V6, "v6")] {
+            let mut dns_conditions = vec![
+                FilterCondition::NotLoopback,
+                FilterCondition::RemotePort(53),
+            ];
+            if let PolicyMode::Connected { tun_luid } = self.mode {
+                dns_conditions.push(FilterCondition::InterfaceNot(tun_luid));
+            }
             filters.push(PolicyFilter {
                 name: if suffix == "v4" {
                     "permit-loopback-v4"
                 } else {
                     "permit-loopback-v6"
-                },
+                }
+                .into(),
                 family,
                 action: FilterAction::Permit,
                 weight: LOOPBACK_FILTER_WEIGHT,
@@ -347,14 +357,12 @@ impl PolicySpec {
                     "block-dns-v4"
                 } else {
                     "block-dns-v6"
-                },
+                }
+                .into(),
                 family,
                 action: FilterAction::Block,
                 weight: DNS_FILTER_WEIGHT,
-                conditions: vec![
-                    FilterCondition::NotLoopback,
-                    FilterCondition::RemotePort(53),
-                ],
+                conditions: dns_conditions,
                 persistent: true,
             });
             filters.push(PolicyFilter {
@@ -362,7 +370,8 @@ impl PolicySpec {
                     "permit-xray-v4"
                 } else {
                     "permit-xray-v6"
-                },
+                }
+                .into(),
                 family,
                 action: FilterAction::Permit,
                 weight: XRAY_FILTER_WEIGHT,
@@ -376,7 +385,8 @@ impl PolicySpec {
                         "block-all-v4"
                     } else {
                         "block-all-v6"
-                    },
+                    }
+                    .into(),
                     family,
                     action: FilterAction::Block,
                     weight: DEFAULT_BLOCK_FILTER_WEIGHT,
@@ -390,7 +400,8 @@ impl PolicySpec {
                                 "permit-lan-v4"
                             } else {
                                 "permit-lan-v6"
-                            },
+                            }
+                            .into(),
                             family,
                             action: FilterAction::Permit,
                             weight: LAN_FILTER_WEIGHT,
@@ -407,12 +418,23 @@ impl PolicySpec {
                             persistent: true,
                         });
                     }
+                    for (index, path) in self.excluded_apps.iter().enumerate() {
+                        filters.push(PolicyFilter {
+                            name: format!("permit-excluded-app-{suffix}-{}", index + 1),
+                            family,
+                            action: FilterAction::Permit,
+                            weight: EXCLUDED_APP_FILTER_WEIGHT,
+                            conditions: vec![FilterCondition::Application(path.clone())],
+                            persistent: true,
+                        });
+                    }
                     filters.push(PolicyFilter {
                         name: if suffix == "v4" {
                             "block-outside-tun-v4"
                         } else {
                             "block-outside-tun-v6"
-                        },
+                        }
+                        .into(),
                         family,
                         action: FilterAction::Block,
                         weight: DEFAULT_BLOCK_FILTER_WEIGHT,

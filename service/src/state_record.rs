@@ -14,6 +14,14 @@ pub struct DesiredStateRecord {
 
 impl DesiredStateRecord {
     pub const FORMAT_VERSION: u16 = 1;
+
+    pub fn new(operation_id: u64, request: ConnectRequest) -> Self {
+        Self {
+            format_version: Self::FORMAT_VERSION,
+            operation_id,
+            request,
+        }
+    }
 }
 
 pub fn encode_desired_state(record: &DesiredStateRecord) -> Result<Vec<u8>, String> {

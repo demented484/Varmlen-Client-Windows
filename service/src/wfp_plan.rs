@@ -74,7 +74,7 @@ fn expand_filter(filter: PolicyFilter, output: &mut Vec<CompiledRule>) -> Result
             .iter()
             .map(compile_condition)
             .collect::<Result<Vec<_>, _>>()?;
-        output.push(compiled_rule(&filter, filter.name.to_string(), conditions));
+        output.push(compiled_rule(&filter, filter.name.clone(), conditions));
     }
     Ok(())
 }

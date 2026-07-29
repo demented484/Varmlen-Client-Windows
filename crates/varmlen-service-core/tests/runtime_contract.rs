@@ -120,6 +120,7 @@ fn connected_policy_keeps_dns_above_xray_and_blocks_non_tun_interfaces() {
         mode: PolicyMode::Connected { tun_luid: 42 },
         allow_lan: true,
         xray_path: PathBuf::from(r"C:\Program Files\Varmlen\xray.exe"),
+        excluded_apps: Vec::new(),
     };
     let filters = policy.filters();
 
@@ -140,6 +141,7 @@ fn hold_policy_has_no_tun_escape_and_lan_never_bypasses_dns_block() {
         mode: PolicyMode::Hold,
         allow_lan: true,
         xray_path: PathBuf::from(r"C:\Program Files\Varmlen\xray.exe"),
+        excluded_apps: Vec::new(),
     };
     let filters = policy.filters();
 

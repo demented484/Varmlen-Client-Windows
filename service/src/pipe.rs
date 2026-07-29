@@ -1,23 +1,18 @@
 use std::{
-    ffi::c_void,
-    fs, io,
-    mem::size_of,
-    os::windows::io::AsRawHandle,
-    path::PathBuf,
-    ptr,
-    sync::{Arc, RwLock},
+    ffi::c_void, fs, io, mem::size_of, os::windows::io::AsRawHandle, path::PathBuf, ptr, sync::Arc,
 };
 
 use async_trait::async_trait;
 use tokio::{
     net::windows::named_pipe::{NamedPipeServer, ServerOptions},
-    sync::watch,
+    sync::{watch, Mutex},
     task::JoinSet,
 };
 use varmlen_protocol::{
     ServiceCommand, ServiceError, ServiceErrorCode, ServiceState, MAX_FRAME_BYTES,
 };
 use varmlen_service_core::{
+    controller::{ConnectionBackend, ConnectionController},
     framing::{read_payload, write_payload},
     handler::{handle_payload, CommandExecutor},
 };
@@ -42,6 +37,8 @@ use windows::{
 
 use crate::{
     pipe_policy::{pipe_security_descriptor_sddl, InstalledUserSid, PipeClientIdentity},
+    windows_backend::WindowsBackend,
+    windows_state::load_desired_state,
     PIPE_NAME,
 };
 
@@ -74,37 +71,48 @@ pub fn load_installed_user_sid() -> io::Result<InstalledUserSid> {
     })
 }
 
-#[derive(Clone)]
-pub struct SnapshotExecutor {
-    state: Arc<RwLock<ServiceState>>,
+pub struct RuntimeExecutor {
+    controller: Mutex<ConnectionController<WindowsBackend>>,
 }
 
-impl SnapshotExecutor {
-    pub fn disconnected() -> Self {
-        Self {
-            state: Arc::new(RwLock::new(ServiceState::disconnected())),
+impl RuntimeExecutor {
+    pub async fn open() -> io::Result<Self> {
+        let backend = WindowsBackend::open()?;
+        let desired = load_desired_state(backend.layout())?;
+        let mut controller = ConnectionController::disconnected(backend);
+        if let Some(record) = desired {
+            if controller
+                .connect(record.operation_id, record.request)
+                .await
+                .is_err()
+            {
+                controller
+                    .backend_mut()
+                    .install_transition_hold()
+                    .await
+                    .map_err(|error| io::Error::other(error.message))?;
+                controller.force_blocked(record.operation_id);
+            }
         }
+        Ok(Self {
+            controller: Mutex::new(controller),
+        })
     }
 }
 
 #[async_trait]
-impl CommandExecutor for SnapshotExecutor {
+impl CommandExecutor for RuntimeExecutor {
     async fn execute(
         &self,
-        _operation_id: u64,
+        operation_id: u64,
         command: ServiceCommand,
     ) -> Result<ServiceState, ServiceError> {
+        let mut controller = self.controller.lock().await;
         match command {
-            ServiceCommand::Status => {
-                self.state.read().map(|state| state.clone()).map_err(|_| {
-                    ServiceError::new(ServiceErrorCode::Internal, "state lock poisoned")
-                })
-            }
-            ServiceCommand::Connect(_) | ServiceCommand::Disconnect { .. } => {
-                Err(ServiceError::new(
-                    ServiceErrorCode::Internal,
-                    "Windows data plane is not implemented in this foundation build",
-                ))
+            ServiceCommand::Status => Ok(controller.state().clone()),
+            ServiceCommand::Connect(request) => controller.connect(operation_id, request).await,
+            ServiceCommand::Disconnect { keep_blocked } => {
+                controller.disconnect(operation_id, keep_blocked).await
             }
         }
     }
@@ -112,7 +120,7 @@ impl CommandExecutor for SnapshotExecutor {
 
 pub async fn run_pipe_host(mut shutdown: watch::Receiver<bool>) -> io::Result<()> {
     let installed_user = Arc::new(load_installed_user_sid()?);
-    let executor = Arc::new(SnapshotExecutor::disconnected());
+    let executor = Arc::new(RuntimeExecutor::open().await?);
     let mut clients = JoinSet::new();
     let mut listener = create_pipe_server(&installed_user, true)?;
 

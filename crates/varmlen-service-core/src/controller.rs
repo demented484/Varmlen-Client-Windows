@@ -3,6 +3,7 @@ use varmlen_protocol::{ConnectRequest, ConnectionPhase, ServiceError, ServiceSta
 
 #[async_trait]
 pub trait ConnectionBackend {
+    fn set_operation_id(&mut self, _operation_id: u64) {}
     async fn validate_candidate(&mut self, request: &ConnectRequest) -> Result<(), ServiceError>;
     async fn install_transition_hold(&mut self) -> Result<(), ServiceError>;
     async fn verify_transition_hold(&mut self) -> Result<(), ServiceError>;
@@ -48,6 +49,20 @@ impl<B> ConnectionController<B> {
     pub fn backend(&self) -> &B {
         &self.backend
     }
+
+    pub fn backend_mut(&mut self) -> &mut B {
+        &mut self.backend
+    }
+
+    pub fn force_blocked(&mut self, operation_id: u64) {
+        self.state = ServiceState {
+            phase: ConnectionPhase::Blocked,
+            operation_id,
+            split_active: false,
+            dns_protected: false,
+            network_blocked: true,
+        };
+    }
 }
 
 impl<B: ConnectionBackend> ConnectionController<B> {
@@ -80,6 +95,7 @@ impl<B: ConnectionBackend> ConnectionController<B> {
         operation_id: u64,
         request: ConnectRequest,
     ) -> Result<ServiceState, ServiceError> {
+        self.backend.set_operation_id(operation_id);
         let previous_state = self.state.clone();
         let was_connected = self.state.phase == ConnectionPhase::Connected;
 
@@ -147,6 +163,7 @@ impl<B: ConnectionBackend> ConnectionController<B> {
         operation_id: u64,
         keep_blocked: bool,
     ) -> Result<ServiceState, ServiceError> {
+        self.backend.set_operation_id(operation_id);
         self.state = ServiceState {
             phase: ConnectionPhase::Stopping,
             operation_id,
