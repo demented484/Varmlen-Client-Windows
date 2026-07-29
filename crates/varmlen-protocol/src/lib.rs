@@ -49,6 +49,7 @@ pub enum ConnectionPhase {
     Starting,
     Connected,
     Stopping,
+    Blocked,
     Restoring,
     BlockedError,
 }
@@ -59,6 +60,7 @@ pub struct ServiceState {
     pub operation_id: u64,
     pub split_active: bool,
     pub dns_protected: bool,
+    pub network_blocked: bool,
 }
 
 impl ServiceState {
@@ -68,6 +70,7 @@ impl ServiceState {
             operation_id: 0,
             split_active: false,
             dns_protected: false,
+            network_blocked: false,
         }
     }
 }

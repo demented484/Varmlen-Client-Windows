@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/varmlen-protocol"]
+members = ["crates/varmlen-protocol", "crates/varmlen-service-core"]
 resolver = "2"
 
 [workspace.package]

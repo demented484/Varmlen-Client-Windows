@@ -185,6 +185,7 @@ fn decoding_rejects_invalid_json_and_an_incompatible_response_version() {
             operation_id: 77,
             split_active: false,
             dns_protected: false,
+            network_blocked: false,
         }),
     };
     let bytes = serde_json::to_vec(&response).unwrap();
@@ -199,4 +200,21 @@ fn request_round_trip_preserves_operation_and_connect_fields() {
     let request = valid_request();
     let bytes = encode_payload(&request).unwrap();
     assert_eq!(decode_request(&bytes).unwrap(), request);
+}
+
+#[test]
+fn intentional_kill_switch_block_is_distinct_from_an_error() {
+    let response = ResponseEnvelope {
+        version: PROTOCOL_VERSION,
+        operation_id: 88,
+        result: Ok(ServiceState {
+            phase: ConnectionPhase::Blocked,
+            operation_id: 88,
+            split_active: false,
+            dns_protected: false,
+            network_blocked: true,
+        }),
+    };
+    let bytes = encode_payload(&response).unwrap();
+    assert_eq!(decode_response(&bytes).unwrap(), response);
 }
