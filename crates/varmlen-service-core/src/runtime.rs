@@ -45,10 +45,28 @@ pub struct ValidationInspection {
 
 pub fn inspect_native_tun_config(config: &str) -> Result<NativeTunInspection, String> {
     let root = parse_object(config, "native Xray config")?;
+    reject_unknown_top_level_fields(
+        &root,
+        &[
+            "log",
+            "dns",
+            "inbounds",
+            "outbounds",
+            "routing",
+            "observatory",
+            "burstObservatory",
+        ],
+        "native Xray config",
+    )?;
+    reject_log_file_paths(&root, "native Xray config")?;
+    reject_privileged_file_references(&Value::Object(root.clone()))?;
     let inbounds = root
         .get("inbounds")
         .and_then(Value::as_array)
         .ok_or_else(|| "native Xray config has no inbounds array".to_string())?;
+    if inbounds.len() != 1 {
+        return Err("native Xray config must contain exactly one inbound".into());
+    }
     let tun = inbounds
         .iter()
         .find(|inbound| inbound.get("protocol").and_then(Value::as_str) == Some("tun"))
@@ -124,6 +142,13 @@ pub fn inspect_native_tun_config(config: &str) -> Result<NativeTunInspection, St
 
 pub fn inspect_validation_config(config: &str) -> Result<ValidationInspection, String> {
     let root = parse_object(config, "validation Xray config")?;
+    reject_unknown_top_level_fields(
+        &root,
+        &["log", "dns", "inbounds", "outbounds", "routing"],
+        "validation Xray config",
+    )?;
+    reject_log_file_paths(&root, "validation Xray config")?;
+    reject_privileged_file_references(&Value::Object(root.clone()))?;
     let inbounds = root
         .get("inbounds")
         .and_then(Value::as_array)
@@ -135,13 +160,13 @@ pub fn inspect_validation_config(config: &str) -> Result<ValidationInspection, S
         return Err("validation Xray config must not create a TUN adapter".into());
     }
 
-    if inbounds.iter().any(|inbound| {
-        inbound
-            .get("listen")
-            .and_then(Value::as_str)
-            .is_some_and(|address| !matches!(address, "127.0.0.1" | "::1" | "localhost"))
-    }) {
-        return Err("every validation inbound must listen on loopback".into());
+    for inbound in inbounds {
+        let Some(address) = inbound.get("listen").and_then(Value::as_str) else {
+            return Err("every validation inbound must have an explicit loopback listener".into());
+        };
+        if !matches!(address, "127.0.0.1" | "::1") {
+            return Err("every validation inbound must listen on loopback".into());
+        }
     }
 
     let socks_ports = inbounds
@@ -172,6 +197,59 @@ fn parse_object(config: &str, label: &str) -> Result<serde_json::Map<String, Val
         .as_object()
         .cloned()
         .ok_or_else(|| format!("{label} must be a JSON object"))
+}
+
+fn reject_unknown_top_level_fields(
+    root: &serde_json::Map<String, Value>,
+    allowed: &[&str],
+    label: &str,
+) -> Result<(), String> {
+    if let Some(field) = root.keys().find(|field| !allowed.contains(&field.as_str())) {
+        return Err(format!("{label} has unsupported top-level field: {field}"));
+    }
+    Ok(())
+}
+
+fn reject_log_file_paths(root: &serde_json::Map<String, Value>, label: &str) -> Result<(), String> {
+    let Some(log) = root.get("log") else {
+        return Ok(());
+    };
+    let log = log
+        .as_object()
+        .ok_or_else(|| format!("{label} log must be an object"))?;
+    if log.contains_key("access") || log.contains_key("error") {
+        return Err(format!("{label} must not set log file paths"));
+    }
+    if let Some(field) = log.keys().find(|field| field.as_str() != "loglevel") {
+        return Err(format!("{label} log has unsupported field: {field}"));
+    }
+    Ok(())
+}
+
+fn reject_privileged_file_references(value: &Value) -> Result<(), String> {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                let key = key.to_ascii_lowercase();
+                if matches!(
+                    key.as_str(),
+                    "file" | "certificatefile" | "keyfile" | "cafile" | "certfile"
+                ) {
+                    return Err(format!(
+                        "privileged file reference is not allowed in Xray config: {key}"
+                    ));
+                }
+                reject_privileged_file_references(value)?;
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                reject_privileged_file_references(value)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn required_string<'a>(value: Option<&'a Value>, label: &str) -> Result<&'a str, String> {

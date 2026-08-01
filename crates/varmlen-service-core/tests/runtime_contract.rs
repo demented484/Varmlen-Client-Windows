@@ -90,6 +90,47 @@ fn validation_config_must_only_listen_on_loopback_and_must_not_create_tun() {
     assert!(inspect_validation_config(&duplicate_ports)
         .unwrap_err()
         .contains("unique"));
+
+    let missing_listen = valid.replace(r#""listen":"127.0.0.1","#, "");
+    assert!(inspect_validation_config(&missing_listen)
+        .unwrap_err()
+        .contains("explicit loopback"));
+}
+
+#[test]
+fn privileged_native_config_rejects_extra_capabilities_and_file_paths() {
+    let mut extra_inbound: serde_json::Value =
+        serde_json::from_str(&native_config()).expect("fixture JSON");
+    extra_inbound["inbounds"]
+        .as_array_mut()
+        .expect("inbounds")
+        .push(json!({"listen":"0.0.0.0","port":1080,"protocol":"socks"}));
+    assert!(inspect_native_tun_config(&extra_inbound.to_string())
+        .unwrap_err()
+        .contains("exactly one inbound"));
+
+    let mut api: serde_json::Value = serde_json::from_str(&native_config()).expect("fixture JSON");
+    api["api"] = json!({"tag":"api"});
+    assert!(inspect_native_tun_config(&api.to_string())
+        .unwrap_err()
+        .contains("unsupported top-level field"));
+
+    let mut file_log: serde_json::Value =
+        serde_json::from_str(&native_config()).expect("fixture JSON");
+    file_log["log"] = json!({"loglevel":"debug","access":"C:\\Windows\\Temp\\access.log"});
+    assert!(inspect_native_tun_config(&file_log.to_string())
+        .unwrap_err()
+        .contains("log file paths"));
+
+    let mut certificate: serde_json::Value =
+        serde_json::from_str(&native_config()).expect("fixture JSON");
+    certificate["outbounds"][0]["streamSettings"] = json!({
+        "security": "tls",
+        "tlsSettings": {"certificates": [{"certificateFile":"C:\\secret.pem"}]}
+    });
+    assert!(inspect_native_tun_config(&certificate.to_string())
+        .unwrap_err()
+        .contains("privileged file reference"));
 }
 
 #[test]
