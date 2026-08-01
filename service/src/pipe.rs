@@ -4,13 +4,15 @@ use std::{
 
 use async_trait::async_trait;
 use tokio::{
-    net::windows::named_pipe::{NamedPipeServer, ServerOptions},
-    sync::{watch, Mutex},
+    io::AsyncWriteExt,
+    net::windows::named_pipe::{ClientOptions, NamedPipeServer, ServerOptions},
+    sync::{watch, Mutex, Semaphore},
     task::JoinSet,
-    time::{interval, MissedTickBehavior},
+    time::{interval, timeout, MissedTickBehavior},
 };
 use varmlen_protocol::{
-    ServiceCommand, ServiceError, ServiceErrorCode, ServiceState, MAX_FRAME_BYTES,
+    decode_response, encode_payload, RequestEnvelope, ServiceCommand, ServiceError,
+    ServiceErrorCode, ServiceState, MAX_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use varmlen_service_core::{
     controller::{ConnectionBackend, ConnectionController},
@@ -37,7 +39,10 @@ use windows::{
 };
 
 use crate::{
-    pipe_policy::{pipe_security_descriptor_sddl, InstalledUserSid, PipeClientIdentity},
+    pipe_policy::{
+        pipe_security_descriptor_sddl, InstalledUserSid, PipeClientIdentity, CLIENT_IO_TIMEOUT,
+        MAX_CONCURRENT_CLIENTS,
+    },
     windows_backend::WindowsBackend,
     windows_state::load_desired_state,
     PIPE_NAME,
@@ -119,40 +124,104 @@ impl CommandExecutor for RuntimeExecutor {
     }
 }
 
-pub async fn run_pipe_host(mut shutdown: watch::Receiver<bool>) -> io::Result<()> {
-    let installed_user = Arc::new(load_installed_user_sid()?);
-    let executor = Arc::new(RuntimeExecutor::open().await?);
-    let monitor = tokio::spawn(run_runtime_monitor(Arc::clone(&executor), shutdown.clone()));
-    let mut clients = JoinSet::new();
-    let mut listener = create_pipe_server(&installed_user, true)?;
+pub struct PipeHost {
+    installed_user: Arc<InstalledUserSid>,
+    executor: Arc<RuntimeExecutor>,
+    listener: NamedPipeServer,
+}
 
-    loop {
-        tokio::select! {
-            connect_result = listener.connect() => {
-                connect_result?;
-                let connected = listener;
-                listener = create_pipe_server(&installed_user, false)?;
-
-                let installed_user = Arc::clone(&installed_user);
-                let executor = Arc::clone(&executor);
-                clients.spawn(async move {
-                    let _ = serve_client(connected, &installed_user, executor.as_ref()).await;
-                });
-            }
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    break;
-                }
-            }
-            Some(_) = clients.join_next(), if !clients.is_empty() => {}
-        }
+impl PipeHost {
+    pub async fn open() -> io::Result<Self> {
+        let installed_user = Arc::new(load_installed_user_sid()?);
+        let executor = Arc::new(RuntimeExecutor::open().await?);
+        let listener = create_pipe_server(&installed_user, true)?;
+        Ok(Self {
+            installed_user,
+            executor,
+            listener,
+        })
     }
 
-    drop(listener);
-    clients.shutdown().await;
-    monitor.abort();
-    let _ = monitor.await;
-    Ok(())
+    pub async fn run(mut self, mut shutdown: watch::Receiver<bool>) -> io::Result<()> {
+        let monitor = tokio::spawn(run_runtime_monitor(
+            Arc::clone(&self.executor),
+            shutdown.clone(),
+        ));
+        let client_slots = Arc::new(Semaphore::new(MAX_CONCURRENT_CLIENTS));
+        let mut clients = JoinSet::new();
+
+        loop {
+            tokio::select! {
+                connect_result = self.listener.connect() => {
+                    connect_result?;
+                    let connected = self.listener;
+                    self.listener = create_pipe_server(&self.installed_user, false)?;
+
+                    let Ok(slot) = Arc::clone(&client_slots).try_acquire_owned() else {
+                        drop(connected);
+                        continue;
+                    };
+                    let installed_user = Arc::clone(&self.installed_user);
+                    let executor = Arc::clone(&self.executor);
+                    clients.spawn(async move {
+                        let _slot = slot;
+                        let _ = serve_client(connected, &installed_user, executor.as_ref()).await;
+                    });
+                }
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                }
+                Some(_) = clients.join_next(), if !clients.is_empty() => {}
+            }
+        }
+
+        drop(self.listener);
+        clients.shutdown().await;
+        monitor.abort();
+        let _ = monitor.await;
+        Ok(())
+    }
+}
+
+pub async fn run_pipe_host(shutdown: watch::Receiver<bool>) -> io::Result<()> {
+    PipeHost::open().await?.run(shutdown).await
+}
+
+pub async fn service_health_check() -> io::Result<ServiceState> {
+    let mut pipe = ClientOptions::new()
+        .read(true)
+        .write(true)
+        .open(PIPE_NAME)?;
+    let operation_id = u64::MAX;
+    let request = encode_payload(&RequestEnvelope {
+        version: PROTOCOL_VERSION,
+        operation_id,
+        command: ServiceCommand::Status,
+    })
+    .map_err(service_code_to_io)?;
+    timeout(CLIENT_IO_TIMEOUT, write_payload(&mut pipe, &request))
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "service health write timed out"))?
+        .map_err(service_code_to_io)?;
+    timeout(CLIENT_IO_TIMEOUT, pipe.flush())
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "service health flush timed out"))??;
+    let response = timeout(CLIENT_IO_TIMEOUT, read_payload(&mut pipe))
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "service health read timed out"))?
+        .map_err(service_code_to_io)?;
+    let response = decode_response(&response).map_err(service_code_to_io)?;
+    if response.operation_id != operation_id {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "service health response has a mismatched operation ID",
+        ));
+    }
+    response
+        .result
+        .map_err(|error| io::Error::other(error.message))
 }
 
 async fn run_runtime_monitor(executor: Arc<RuntimeExecutor>, mut shutdown: watch::Receiver<bool>) {
@@ -218,12 +287,16 @@ where
         ));
     }
 
-    let request = read_payload(&mut pipe).await.map_err(service_code_to_io)?;
+    let request = timeout(CLIENT_IO_TIMEOUT, read_payload(&mut pipe))
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "pipe request timed out"))?
+        .map_err(service_code_to_io)?;
     let response = handle_payload(executor, &request)
         .await
         .map_err(service_code_to_io)?;
-    write_payload(&mut pipe, &response)
+    timeout(CLIENT_IO_TIMEOUT, write_payload(&mut pipe, &response))
         .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "pipe response timed out"))?
         .map_err(service_code_to_io)
 }
 

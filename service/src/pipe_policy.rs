@@ -1,3 +1,6 @@
+pub const MAX_CONCURRENT_CLIENTS: usize = 16;
+pub const CLIENT_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct InstalledUserSid(String);
 

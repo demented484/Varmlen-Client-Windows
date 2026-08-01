@@ -1,5 +1,6 @@
 use varmlen_service::pipe_policy::{
-    pipe_security_descriptor_sddl, InstalledUserSid, PipeClientIdentity,
+    pipe_security_descriptor_sddl, InstalledUserSid, PipeClientIdentity, CLIENT_IO_TIMEOUT,
+    MAX_CONCURRENT_CLIENTS,
 };
 use varmlen_service::{PIPE_NAME, SERVICE_NAME};
 
@@ -42,4 +43,11 @@ fn pipe_acl_grants_only_system_admins_and_the_installed_user() {
         pipe_security_descriptor_sddl(&installed),
         "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;S-1-5-21-100-200-300-1001)"
     );
+}
+
+#[test]
+fn pipe_clients_are_bounded_and_have_an_io_deadline() {
+    assert!((1..=32).contains(&MAX_CONCURRENT_CLIENTS));
+    assert!(CLIENT_IO_TIMEOUT >= std::time::Duration::from_secs(1));
+    assert!(CLIENT_IO_TIMEOUT <= std::time::Duration::from_secs(10));
 }
