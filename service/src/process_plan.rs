@@ -113,3 +113,10 @@ pub fn validate_socks5_connect_header(header: [u8; 4]) -> Result<usize, String> 
         )),
     }
 }
+
+pub fn failed_proxy_paths(results: &[(u16, bool)]) -> Vec<u16> {
+    results
+        .iter()
+        .filter_map(|(port, healthy)| (!healthy).then_some(*port))
+        .collect()
+}

@@ -12,7 +12,7 @@ use tokio::{
 };
 use varmlen_protocol::{
     decode_response, encode_payload, RequestEnvelope, ServiceCommand, ServiceError,
-    ServiceErrorCode, ServiceState, MAX_FRAME_BYTES, PROTOCOL_VERSION,
+    ServiceErrorCode, ServiceResponse, ServiceState, MAX_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use varmlen_service_core::{
     controller::ConnectionController,
@@ -39,6 +39,7 @@ use windows::{
 };
 
 use crate::{
+    log_store::{clear_logs, tail_log},
     pipe_policy::{
         pipe_security_descriptor_sddl, InstalledUserSid, PipeClientIdentity, CLIENT_IO_TIMEOUT,
         MAX_CONCURRENT_CLIENTS,
@@ -80,11 +81,13 @@ pub fn load_installed_user_sid() -> io::Result<InstalledUserSid> {
 
 pub struct RuntimeExecutor {
     controller: Mutex<ConnectionController<WindowsBackend>>,
+    log_path: PathBuf,
 }
 
 impl RuntimeExecutor {
     pub async fn open() -> io::Result<Self> {
         let backend = WindowsBackend::open()?;
+        let log_path = backend.layout().log_file.clone();
         let desired = load_desired_state(backend.layout());
         let mut controller = ConnectionController::disconnected(backend);
         let (operation_id, recovery) = match desired {
@@ -128,6 +131,7 @@ impl RuntimeExecutor {
         }
         Ok(Self {
             controller: Mutex::new(controller),
+            log_path,
         })
     }
 }
@@ -138,14 +142,31 @@ impl CommandExecutor for RuntimeExecutor {
         &self,
         operation_id: u64,
         command: ServiceCommand,
-    ) -> Result<ServiceState, ServiceError> {
-        let mut controller = self.controller.lock().await;
+    ) -> Result<ServiceResponse, ServiceError> {
         match command {
-            ServiceCommand::Status => Ok(controller.state().clone()),
-            ServiceCommand::Connect(request) => controller.connect(operation_id, request).await,
-            ServiceCommand::Disconnect { keep_blocked } => {
-                controller.disconnect(operation_id, keep_blocked).await
-            }
+            ServiceCommand::Status => Ok(ServiceResponse::State(
+                self.controller.lock().await.state().clone(),
+            )),
+            ServiceCommand::Connect(request) => self
+                .controller
+                .lock()
+                .await
+                .connect(operation_id, request)
+                .await
+                .map(ServiceResponse::State),
+            ServiceCommand::Disconnect { keep_blocked } => self
+                .controller
+                .lock()
+                .await
+                .disconnect(operation_id, keep_blocked)
+                .await
+                .map(ServiceResponse::State),
+            ServiceCommand::LogTail { max_bytes } => tail_log(&self.log_path, max_bytes as usize)
+                .map(ServiceResponse::LogTail)
+                .map_err(|error| ServiceError::new(ServiceErrorCode::Internal, error.to_string())),
+            ServiceCommand::ClearLog => clear_logs(&self.log_path)
+                .map(|()| ServiceResponse::Ack)
+                .map_err(|error| ServiceError::new(ServiceErrorCode::Internal, error.to_string())),
         }
     }
 }
@@ -245,9 +266,16 @@ pub async fn service_health_check() -> io::Result<ServiceState> {
             "service health response has a mismatched operation ID",
         ));
     }
-    response
+    match response
         .result
-        .map_err(|error| io::Error::other(error.message))
+        .map_err(|error| io::Error::other(error.message))?
+    {
+        ServiceResponse::State(state) => Ok(state),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "service health returned the wrong response type",
+        )),
+    }
 }
 
 async fn run_runtime_monitor(executor: Arc<RuntimeExecutor>, mut shutdown: watch::Receiver<bool>) {

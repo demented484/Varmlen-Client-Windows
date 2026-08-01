@@ -106,22 +106,12 @@ pub async fn vpn_status() -> Result<HelperResponse, String> {
 
 #[tauri::command]
 pub async fn vpn_log() -> Result<String, String> {
-    let path = program_data_path()?.join("xray.log");
-    std::fs::read_to_string(path)
-        .or_else(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                Ok(String::new())
-            } else {
-                Err(error)
-            }
-        })
-        .map_err(|error| error.to_string())
+    service_client::log_tail().await
 }
 
 #[tauri::command]
 pub async fn clear_vpn_log() -> Result<(), String> {
-    let path = program_data_path()?.join("xray.log");
-    std::fs::write(path, "").map_err(|error| error.to_string())
+    service_client::clear_log().await
 }
 
 #[tauri::command]
@@ -242,13 +232,6 @@ fn unique_local_ports(count: usize) -> Result<Vec<u16>, String> {
         }
     }
     Ok(ports)
-}
-
-fn program_data_path() -> Result<PathBuf, String> {
-    std::env::var_os("ProgramData")
-        .map(PathBuf::from)
-        .map(|path| path.join("Varmlen"))
-        .ok_or_else(|| "ProgramData is not set".into())
 }
 
 pub(crate) fn teardown_on_exit(_app: &tauri::AppHandle) {

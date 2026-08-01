@@ -2,14 +2,15 @@ use std::{io, path::PathBuf, time::Duration};
 
 use async_trait::async_trait;
 use tokio::{
-    net::{lookup_host, TcpStream},
+    net::{lookup_host, TcpSocket},
     time::{sleep, timeout},
 };
 use varmlen_protocol::{ConnectRequest, ServiceError, ServiceErrorCode};
 use varmlen_service_core::{
     controller::ConnectionBackend,
     runtime::{
-        inspect_native_tun_config, inspect_validation_config, PolicyMode, PolicySpec, RuntimeLayout,
+        inspect_native_tun_config, inspect_validation_config, PolicyMode, PolicySpec,
+        RuntimeLayout, TUN_IPV4_GATEWAY,
     },
 };
 
@@ -83,9 +84,25 @@ impl WindowsBackend {
     }
 
     async fn connected_health_check(&self) -> io::Result<()> {
-        timeout(Duration::from_secs(5), TcpStream::connect(("1.1.1.1", 443)))
-            .await
-            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "TCP health check timed out"))??;
+        let source = TUN_IPV4_GATEWAY
+            .split_once('/')
+            .map(|(address, _)| address)
+            .unwrap_or(TUN_IPV4_GATEWAY)
+            .parse()
+            .map_err(|error| io::Error::other(format!("invalid TUN probe address: {error}")))?;
+        let socket = TcpSocket::new_v4()?;
+        socket.bind(std::net::SocketAddr::new(source, 0))?;
+        timeout(
+            Duration::from_secs(5),
+            socket.connect("1.1.1.1:443".parse().unwrap()),
+        )
+        .await
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "TUN-bound TCP health check timed out",
+            )
+        })??;
         timeout(Duration::from_secs(5), lookup_host(("mullvad.net", 443)))
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "DNS health check timed out"))??

@@ -2,8 +2,9 @@ use std::net::SocketAddr;
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
+pub const MAX_LOG_TAIL_BYTES: u32 = 256 * 1024;
 pub const SERVICE_PIPE_NAME: &str = r"\\.\pipe\Varmlen\Service\v1";
 const MAX_CONFIG_BYTES: usize = 384 * 1024;
 const MAX_SERVER_ENDPOINTS: usize = 64;
@@ -34,6 +35,8 @@ pub enum ServiceCommand {
     Status,
     Connect(ConnectRequest),
     Disconnect { keep_blocked: bool },
+    LogTail { max_bytes: u32 },
+    ClearLog,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +67,14 @@ pub struct ServiceState {
     pub split_active: bool,
     pub dns_protected: bool,
     pub network_blocked: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum ServiceResponse {
+    State(ServiceState),
+    LogTail(String),
+    Ack,
 }
 
 impl ServiceState {
@@ -114,7 +125,7 @@ impl ServiceError {
 pub struct ResponseEnvelope {
     pub version: u16,
     pub operation_id: u64,
-    pub result: Result<ServiceState, ServiceError>,
+    pub result: Result<ServiceResponse, ServiceError>,
 }
 
 pub fn validate_request(request: &RequestEnvelope) -> Result<(), ServiceErrorCode> {
@@ -124,7 +135,15 @@ pub fn validate_request(request: &RequestEnvelope) -> Result<(), ServiceErrorCod
 
     match &request.command {
         ServiceCommand::Connect(connect) => validate_connect_request(connect),
-        ServiceCommand::Status | ServiceCommand::Disconnect { .. } => Ok(()),
+        ServiceCommand::LogTail { max_bytes }
+            if *max_bytes == 0 || *max_bytes > MAX_LOG_TAIL_BYTES =>
+        {
+            Err(ServiceErrorCode::InvalidRequest)
+        }
+        ServiceCommand::Status
+        | ServiceCommand::Disconnect { .. }
+        | ServiceCommand::LogTail { .. }
+        | ServiceCommand::ClearLog => Ok(()),
     }
 }
 

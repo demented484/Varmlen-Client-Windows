@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use varmlen_protocol::{
     decode_response, encode_payload, ConnectionPhase, RequestEnvelope, ServiceCommand,
-    ServiceError, ServiceErrorCode, ServiceState, PROTOCOL_VERSION,
+    ServiceError, ServiceErrorCode, ServiceResponse, ServiceState, PROTOCOL_VERSION,
 };
 use varmlen_service_core::handler::{handle_payload, CommandExecutor};
 
@@ -27,9 +27,9 @@ impl CommandExecutor for SnapshotExecutor {
         &self,
         operation_id: u64,
         _command: ServiceCommand,
-    ) -> Result<ServiceState, ServiceError> {
+    ) -> Result<ServiceResponse, ServiceError> {
         *self.seen_operation.lock().expect("operation lock") = Some(operation_id);
-        Ok(self.state.clone())
+        Ok(ServiceResponse::State(self.state.clone()))
     }
 }
 
@@ -51,10 +51,13 @@ async fn status_response_keeps_the_request_operation_id() {
         *executor.seen_operation.lock().expect("operation lock"),
         Some(0xfeed)
     );
-    assert_eq!(
-        response.result.unwrap().phase,
-        ConnectionPhase::Disconnected
-    );
+    assert!(matches!(
+        response.result.unwrap(),
+        ServiceResponse::State(ServiceState {
+            phase: ConnectionPhase::Disconnected,
+            ..
+        })
+    ));
 }
 
 #[tokio::test]

@@ -30,9 +30,10 @@ use windows::{
 };
 
 use crate::{
+    log_store::rotate_if_needed,
     process_plan::{
-        socks5_ipv4_connect_request, validate_socks5_connect_header, validate_socks5_method_reply,
-        XrayConfigTransaction, XrayInvocation,
+        failed_proxy_paths, socks5_ipv4_connect_request, validate_socks5_connect_header,
+        validate_socks5_method_reply, XrayConfigTransaction, XrayInvocation,
     },
     windows_state::{atomic_write, ensure_state_directory},
 };
@@ -59,10 +60,7 @@ impl ManagedXray {
         ensure_runtime_assets(layout)?;
         ensure_state_directory(layout)?;
         atomic_write(&layout.active_config, config.as_bytes())?;
-        let log = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&layout.log_file)?;
+        let log = open_log(layout)?;
         let log_error = log.try_clone()?;
         let invocation =
             XrayInvocation::run(layout.xray_executable.clone(), layout.active_config.clone());
@@ -84,10 +82,7 @@ impl ManagedXray {
         prepared: &PreparedXrayConfig,
     ) -> io::Result<Self> {
         ensure_runtime_assets(layout)?;
-        let log = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&layout.log_file)?;
+        let log = open_log(layout)?;
         let log_error = log.try_clone()?;
         let invocation = prepared.transaction.start_candidate();
         let mut command = command_for(&invocation);
@@ -114,6 +109,14 @@ impl ManagedXray {
         }
         Ok(())
     }
+}
+
+fn open_log(layout: &RuntimeLayout) -> io::Result<std::fs::File> {
+    rotate_if_needed(&layout.log_file)?;
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&layout.log_file)
 }
 
 pub async fn prepare_native_config(
@@ -212,26 +215,39 @@ async fn wait_for_socks_reachability(child: &mut Child, ports: &[u16]) -> io::Re
         let mut probes = JoinSet::new();
         for port in ports.iter().copied() {
             probes.spawn(async move {
-                timeout(Duration::from_secs(3), probe_socks5(port))
+                let result = timeout(Duration::from_secs(3), probe_socks5(port))
                     .await
                     .map_err(|_| {
                         io::Error::new(
                             io::ErrorKind::TimedOut,
                             format!("SOCKS5 validation timed out on port {port}"),
                         )
-                    })?
+                    })?;
+                result.map(|()| port)
             });
         }
+        let mut results = Vec::with_capacity(ports.len());
         while let Some(result) = probes.join_next().await {
             match result {
-                Ok(Ok(())) => {
-                    probes.abort_all();
-                    return Ok(());
+                Ok(Ok(port)) => results.push((port, true)),
+                Ok(Err(error)) => {
+                    last_error = error.to_string();
                 }
-                Ok(Err(error)) => last_error = error.to_string(),
-                Err(error) => last_error = format!("SOCKS5 validation task failed: {error}"),
+                Err(error) => {
+                    last_error = format!("SOCKS5 validation task failed: {error}");
+                }
             }
         }
+        for port in ports {
+            if !results.iter().any(|(completed, _)| completed == port) {
+                results.push((*port, false));
+            }
+        }
+        let failed = failed_proxy_paths(&results);
+        if failed.is_empty() {
+            return Ok(());
+        }
+        last_error = format!("proxy paths on ports {failed:?} failed; last error: {last_error}");
 
         if Instant::now() >= deadline {
             return Err(io::Error::new(

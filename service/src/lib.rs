@@ -1,3 +1,4 @@
+pub mod log_store;
 pub mod pipe_policy;
 pub mod process_plan;
 pub mod state_record;

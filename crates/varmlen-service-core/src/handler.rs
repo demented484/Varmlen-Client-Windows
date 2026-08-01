@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use varmlen_protocol::{
     encode_payload, validate_request, RequestEnvelope, ResponseEnvelope, ServiceCommand,
-    ServiceError, ServiceErrorCode, ServiceState, MAX_FRAME_BYTES, PROTOCOL_VERSION,
+    ServiceError, ServiceErrorCode, ServiceResponse, MAX_FRAME_BYTES, PROTOCOL_VERSION,
 };
 
 #[async_trait]
@@ -10,7 +10,7 @@ pub trait CommandExecutor: Send + Sync {
         &self,
         operation_id: u64,
         command: ServiceCommand,
-    ) -> Result<ServiceState, ServiceError>;
+    ) -> Result<ServiceResponse, ServiceError>;
 }
 
 pub async fn handle_payload<E>(executor: &E, payload: &[u8]) -> Result<Vec<u8>, ServiceErrorCode>

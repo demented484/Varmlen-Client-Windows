@@ -5,25 +5,50 @@ mod platform {
     use tokio::{io::AsyncWriteExt, net::windows::named_pipe::ClientOptions};
     use varmlen_protocol::{
         decode_response, encode_payload, ConnectRequest, RequestEnvelope, ServiceCommand,
-        ServiceState, PROTOCOL_VERSION, SERVICE_PIPE_NAME,
+        ServiceResponse, ServiceState, MAX_LOG_TAIL_BYTES, PROTOCOL_VERSION, SERVICE_PIPE_NAME,
     };
     use varmlen_service_core::framing::{read_payload, write_payload};
 
     static NEXT_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
 
     pub async fn service_status() -> Result<ServiceState, String> {
-        request(ServiceCommand::Status).await
+        expect_state(request(ServiceCommand::Status).await?)
     }
 
     pub async fn connect(request_body: ConnectRequest) -> Result<ServiceState, String> {
-        request(ServiceCommand::Connect(request_body)).await
+        expect_state(request(ServiceCommand::Connect(request_body)).await?)
     }
 
     pub async fn disconnect(keep_blocked: bool) -> Result<ServiceState, String> {
-        request(ServiceCommand::Disconnect { keep_blocked }).await
+        expect_state(request(ServiceCommand::Disconnect { keep_blocked }).await?)
     }
 
-    async fn request(command: ServiceCommand) -> Result<ServiceState, String> {
+    pub async fn log_tail() -> Result<String, String> {
+        match request(ServiceCommand::LogTail {
+            max_bytes: MAX_LOG_TAIL_BYTES,
+        })
+        .await?
+        {
+            ServiceResponse::LogTail(log) => Ok(log),
+            _ => Err("VarmlenService returned the wrong log response type".into()),
+        }
+    }
+
+    pub async fn clear_log() -> Result<(), String> {
+        match request(ServiceCommand::ClearLog).await? {
+            ServiceResponse::Ack => Ok(()),
+            _ => Err("VarmlenService returned the wrong clear-log response type".into()),
+        }
+    }
+
+    fn expect_state(response: ServiceResponse) -> Result<ServiceState, String> {
+        match response {
+            ServiceResponse::State(state) => Ok(state),
+            _ => Err("VarmlenService returned the wrong state response type".into()),
+        }
+    }
+
+    async fn request(command: ServiceCommand) -> Result<ServiceResponse, String> {
         let operation_id = NEXT_OPERATION_ID.fetch_add(1, Ordering::Relaxed);
         let request = RequestEnvelope {
             version: PROTOCOL_VERSION,
@@ -38,16 +63,23 @@ mod platform {
             .write(true)
             .open(SERVICE_PIPE_NAME)
             .map_err(|error| format!("VarmlenService is unavailable: {error}"))?;
-        write_payload(&mut pipe, &request)
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            write_payload(&mut pipe, &request),
+        )
+        .await
+        .map_err(|_| "timed out writing the service request".to_string())?
+        .map_err(|error| format!("failed to write service request: {error:?}"))?;
+        tokio::time::timeout(std::time::Duration::from_secs(5), pipe.flush())
             .await
-            .map_err(|error| format!("failed to write service request: {error:?}"))?;
-        pipe.flush()
-            .await
+            .map_err(|_| "timed out flushing the service request".to_string())?
             .map_err(|error| format!("failed to flush service request: {error}"))?;
 
-        let response = read_payload(&mut pipe)
-            .await
-            .map_err(|error| format!("failed to read service response: {error:?}"))?;
+        let response =
+            tokio::time::timeout(std::time::Duration::from_secs(60), read_payload(&mut pipe))
+                .await
+                .map_err(|_| "VarmlenService command timed out".to_string())?
+                .map_err(|error| format!("failed to read service response: {error:?}"))?;
         let response = decode_response(&response)
             .map_err(|error| format!("invalid service response: {error:?}"))?;
         if response.operation_id != operation_id {
@@ -72,6 +104,14 @@ mod platform {
     pub async fn disconnect(_keep_blocked: bool) -> Result<ServiceState, String> {
         Err("VarmlenService is only supported on Windows".into())
     }
+
+    pub async fn log_tail() -> Result<String, String> {
+        Err("VarmlenService is only supported on Windows".into())
+    }
+
+    pub async fn clear_log() -> Result<(), String> {
+        Err("VarmlenService is only supported on Windows".into())
+    }
 }
 
-pub use platform::{connect, disconnect, service_status};
+pub use platform::{clear_log, connect, disconnect, log_tail, service_status};

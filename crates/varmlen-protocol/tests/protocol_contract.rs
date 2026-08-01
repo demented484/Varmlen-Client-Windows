@@ -1,7 +1,7 @@
 use varmlen_protocol::{
     decode_request, decode_response, encode_payload, validate_request, AppSelector, ConnectRequest,
     ConnectionPhase, RequestEnvelope, ResponseEnvelope, ServiceCommand, ServiceErrorCode,
-    ServiceState, PROTOCOL_VERSION,
+    ServiceResponse, ServiceState, MAX_LOG_TAIL_BYTES, PROTOCOL_VERSION,
 };
 
 fn valid_request() -> RequestEnvelope {
@@ -181,13 +181,13 @@ fn decoding_rejects_invalid_json_and_an_incompatible_response_version() {
     let response = ResponseEnvelope {
         version: PROTOCOL_VERSION + 1,
         operation_id: 77,
-        result: Ok(ServiceState {
+        result: Ok(ServiceResponse::State(ServiceState {
             phase: ConnectionPhase::Disconnected,
             operation_id: 77,
             split_active: false,
             dns_protected: false,
             network_blocked: false,
-        }),
+        })),
     };
     let bytes = serde_json::to_vec(&response).unwrap();
     assert_eq!(
@@ -208,13 +208,36 @@ fn intentional_kill_switch_block_is_distinct_from_an_error() {
     let response = ResponseEnvelope {
         version: PROTOCOL_VERSION,
         operation_id: 88,
-        result: Ok(ServiceState {
+        result: Ok(ServiceResponse::State(ServiceState {
             phase: ConnectionPhase::Blocked,
             operation_id: 88,
             split_active: false,
             dns_protected: false,
             network_blocked: true,
-        }),
+        })),
+    };
+    let bytes = encode_payload(&response).unwrap();
+    assert_eq!(decode_response(&bytes).unwrap(), response);
+}
+
+#[test]
+fn log_tail_is_bounded_and_has_a_typed_response() {
+    for max_bytes in [0, MAX_LOG_TAIL_BYTES + 1] {
+        let request = RequestEnvelope {
+            version: PROTOCOL_VERSION,
+            operation_id: 12,
+            command: ServiceCommand::LogTail { max_bytes },
+        };
+        assert_eq!(
+            validate_request(&request),
+            Err(ServiceErrorCode::InvalidRequest)
+        );
+    }
+
+    let response = ResponseEnvelope {
+        version: PROTOCOL_VERSION,
+        operation_id: 13,
+        result: Ok(ServiceResponse::LogTail("last lines".into())),
     };
     let bytes = encode_payload(&response).unwrap();
     assert_eq!(decode_response(&bytes).unwrap(), response);
