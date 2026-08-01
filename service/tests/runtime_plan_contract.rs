@@ -6,7 +6,7 @@ use varmlen_protocol::{
 use varmlen_service::{
     process_plan::{
         socks5_ipv4_connect_request, validate_socks5_connect_header, validate_socks5_method_reply,
-        XrayInvocation, XrayInvocationKind,
+        XrayConfigTransaction, XrayInvocation, XrayInvocationKind,
     },
     state_record::{decode_desired_state, encode_desired_state, DesiredStateRecord},
 };
@@ -70,6 +70,21 @@ fn xray_invocations_use_fixed_arguments_without_shell_interpolation() {
     assert_eq!(run.kind, XrayInvocationKind::Run);
     assert_eq!(run.arguments[0], "run");
     assert!(!run.arguments.contains(&"-test".to_string()));
+}
+
+#[test]
+fn native_preflight_and_candidate_start_use_the_same_config_file() {
+    let executable = PathBuf::from(r"C:\Program Files\Varmlen\xray.exe");
+    let candidate = PathBuf::from(r"C:\ProgramData\Varmlen\candidate.json");
+    let active = PathBuf::from(r"C:\ProgramData\Varmlen\active.json");
+    let transaction = XrayConfigTransaction::new(executable, candidate.clone(), active.clone());
+
+    assert_eq!(transaction.preflight().kind, XrayInvocationKind::Validate);
+    assert_eq!(transaction.preflight().config_path(), candidate);
+    assert_eq!(transaction.start_candidate().kind, XrayInvocationKind::Run);
+    assert_eq!(transaction.start_candidate().config_path(), candidate);
+    assert_eq!(transaction.active_path(), active.as_path());
+    assert_ne!(transaction.start_candidate().config_path(), active);
 }
 
 #[test]

@@ -112,6 +112,11 @@ fn runtime_layout_never_resolves_privileged_binaries_from_user_state() {
         layout.desired_state,
         PathBuf::from(r"C:\ProgramData\Varmlen\desired-state.bin")
     );
+    assert_eq!(
+        layout.candidate_config,
+        PathBuf::from(r"C:\ProgramData\Varmlen\candidate.json")
+    );
+    assert_ne!(layout.candidate_config, layout.active_config);
 }
 
 #[test]

@@ -211,6 +211,7 @@ pub struct RuntimeLayout {
     pub state_dir: PathBuf,
     pub desired_state: PathBuf,
     pub active_config: PathBuf,
+    pub candidate_config: PathBuf,
     pub validation_config: PathBuf,
     pub log_file: PathBuf,
 }
@@ -229,6 +230,7 @@ impl RuntimeLayout {
             geosite_database: portable_join(&install_dir, "geosite.dat"),
             desired_state: portable_join(&state_dir, "desired-state.bin"),
             active_config: portable_join(&state_dir, "active.json"),
+            candidate_config: portable_join(&state_dir, "candidate.json"),
             validation_config: portable_join(&state_dir, "validation.json"),
             log_file: portable_join(&state_dir, "xray.log"),
             install_dir,

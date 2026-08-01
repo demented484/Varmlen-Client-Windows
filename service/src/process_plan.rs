@@ -38,6 +38,43 @@ impl XrayInvocation {
             ],
         }
     }
+
+    pub fn config_path(&self) -> &std::path::Path {
+        std::path::Path::new(
+            self.arguments
+                .last()
+                .expect("Xray invocation always has a config argument"),
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct XrayConfigTransaction {
+    executable: PathBuf,
+    candidate_path: PathBuf,
+    active_path: PathBuf,
+}
+
+impl XrayConfigTransaction {
+    pub fn new(executable: PathBuf, candidate_path: PathBuf, active_path: PathBuf) -> Self {
+        Self {
+            executable,
+            candidate_path,
+            active_path,
+        }
+    }
+
+    pub fn preflight(&self) -> XrayInvocation {
+        XrayInvocation::validation(self.executable.clone(), self.candidate_path.clone())
+    }
+
+    pub fn start_candidate(&self) -> XrayInvocation {
+        XrayInvocation::run(self.executable.clone(), self.candidate_path.clone())
+    }
+
+    pub fn active_path(&self) -> &std::path::Path {
+        &self.active_path
+    }
 }
 
 pub fn socks5_ipv4_connect_request(address: [u8; 4], port: u16) -> [u8; 10] {

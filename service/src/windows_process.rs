@@ -32,7 +32,7 @@ use windows::{
 use crate::{
     process_plan::{
         socks5_ipv4_connect_request, validate_socks5_connect_header, validate_socks5_method_reply,
-        XrayInvocation,
+        XrayConfigTransaction, XrayInvocation,
     },
     windows_state::{atomic_write, ensure_state_directory},
 };
@@ -40,6 +40,18 @@ use crate::{
 pub struct ManagedXray {
     _job: OwnedJob,
     child: Child,
+}
+
+#[derive(Debug, Clone)]
+pub struct PreparedXrayConfig {
+    transaction: XrayConfigTransaction,
+    contents: Vec<u8>,
+}
+
+impl PreparedXrayConfig {
+    pub fn persist_active(&self) -> io::Result<()> {
+        atomic_write(self.transaction.active_path(), &self.contents)
+    }
 }
 
 impl ManagedXray {
@@ -67,6 +79,30 @@ impl ManagedXray {
         Ok(Self { _job: job, child })
     }
 
+    pub fn start_prepared(
+        layout: &RuntimeLayout,
+        prepared: &PreparedXrayConfig,
+    ) -> io::Result<Self> {
+        ensure_runtime_assets(layout)?;
+        let log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&layout.log_file)?;
+        let log_error = log.try_clone()?;
+        let invocation = prepared.transaction.start_candidate();
+        let mut command = command_for(&invocation);
+        command
+            .current_dir(&layout.install_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(log_error))
+            .kill_on_drop(true);
+        let job = OwnedJob::new()?;
+        let child = command.spawn()?;
+        job.assign(&child)?;
+        Ok(Self { _job: job, child })
+    }
+
     pub fn is_running(&mut self) -> io::Result<bool> {
         Ok(self.child.try_wait()?.is_none())
     }
@@ -78,6 +114,25 @@ impl ManagedXray {
         }
         Ok(())
     }
+}
+
+pub async fn prepare_native_config(
+    layout: &RuntimeLayout,
+    config: &str,
+) -> io::Result<PreparedXrayConfig> {
+    ensure_runtime_assets(layout)?;
+    ensure_state_directory(layout)?;
+    let transaction = XrayConfigTransaction::new(
+        layout.xray_executable.clone(),
+        layout.candidate_config.clone(),
+        layout.active_config.clone(),
+    );
+    atomic_write(&layout.candidate_config, config.as_bytes())?;
+    validate_config_syntax(layout, &transaction.preflight()).await?;
+    Ok(PreparedXrayConfig {
+        transaction,
+        contents: config.as_bytes().to_vec(),
+    })
 }
 
 impl Drop for ManagedXray {
@@ -92,7 +147,11 @@ pub async fn validate_config(layout: &RuntimeLayout, config: &str) -> io::Result
     let inspection = inspect_validation_config(config)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     atomic_write(&layout.validation_config, config.as_bytes())?;
-    validate_config_syntax(layout).await?;
+    let invocation = XrayInvocation::validation(
+        layout.xray_executable.clone(),
+        layout.validation_config.clone(),
+    );
+    validate_config_syntax(layout, &invocation).await?;
 
     let invocation = XrayInvocation::run(
         layout.xray_executable.clone(),
@@ -115,12 +174,11 @@ pub async fn validate_config(layout: &RuntimeLayout, config: &str) -> io::Result
     probe_result
 }
 
-async fn validate_config_syntax(layout: &RuntimeLayout) -> io::Result<()> {
-    let invocation = XrayInvocation::validation(
-        layout.xray_executable.clone(),
-        layout.validation_config.clone(),
-    );
-    let mut command = command_for(&invocation);
+async fn validate_config_syntax(
+    layout: &RuntimeLayout,
+    invocation: &XrayInvocation,
+) -> io::Result<()> {
+    let mut command = command_for(invocation);
     command
         .current_dir(&layout.install_dir)
         .stdin(Stdio::null())

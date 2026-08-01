@@ -16,7 +16,7 @@ use varmlen_service_core::{
 use crate::{
     state_record::DesiredStateRecord,
     windows_adapter::{find_varmlen_adapter, AdapterInfo},
-    windows_process::{validate_config, ManagedXray},
+    windows_process::{prepare_native_config, validate_config, ManagedXray, PreparedXrayConfig},
     windows_state::{
         clear_desired_state, ensure_state_directory, persist_desired_state, runtime_layout,
     },
@@ -30,6 +30,7 @@ pub struct WindowsBackend {
     active_request: Option<ConnectRequest>,
     previous_request: Option<ConnectRequest>,
     candidate_request: Option<ConnectRequest>,
+    prepared_candidate: Option<PreparedXrayConfig>,
     pending_operation_id: u64,
 }
 
@@ -44,6 +45,7 @@ impl WindowsBackend {
             active_request: None,
             previous_request: None,
             candidate_request: None,
+            prepared_candidate: None,
             pending_operation_id: 0,
         })
     }
@@ -145,6 +147,11 @@ impl ConnectionBackend for WindowsBackend {
         validate_config(&self.layout, &request.validation_config)
             .await
             .map_err(|error| service_error(ServiceErrorCode::ValidationFailed, error))?;
+        self.prepared_candidate = Some(
+            prepare_native_config(&self.layout, &request.xray_config)
+                .await
+                .map_err(|error| service_error(ServiceErrorCode::ValidationFailed, error))?,
+        );
         self.candidate_request = Some(request.clone());
         Ok(())
     }
@@ -169,8 +176,14 @@ impl ConnectionBackend for WindowsBackend {
     }
 
     async fn start_candidate(&mut self, request: &ConnectRequest) -> Result<(), ServiceError> {
+        let prepared = self.prepared_candidate.as_ref().ok_or_else(|| {
+            service_error(
+                ServiceErrorCode::ValidationFailed,
+                "native candidate was not preflighted",
+            )
+        })?;
         self.active = Some(
-            ManagedXray::start(&self.layout, &request.xray_config)
+            ManagedXray::start_prepared(&self.layout, prepared)
                 .map_err(|error| service_error(ServiceErrorCode::XrayStartFailed, error))?,
         );
         self.candidate_request = Some(request.clone());
@@ -209,9 +222,15 @@ impl ConnectionBackend for WindowsBackend {
             &DesiredStateRecord::new(self.pending_operation_id, request.clone()),
         )
         .map_err(|error| service_error(ServiceErrorCode::Internal, error))?;
+        self.prepared_candidate
+            .as_ref()
+            .ok_or_else(|| service_error(ServiceErrorCode::Internal, "candidate config missing"))?
+            .persist_active()
+            .map_err(|error| service_error(ServiceErrorCode::Internal, error))?;
         self.active_request = Some(request.clone());
         self.previous_request = None;
         self.candidate_request = None;
+        self.prepared_candidate = None;
         Ok(())
     }
 
@@ -251,6 +270,7 @@ impl ConnectionBackend for WindowsBackend {
             .map_err(|error| service_error(ServiceErrorCode::RestoreFailed, error))?;
         self.active_request = Some(previous);
         self.candidate_request = None;
+        self.prepared_candidate = None;
         Ok(())
     }
 
@@ -261,6 +281,7 @@ impl ConnectionBackend for WindowsBackend {
         self.active_request = None;
         self.previous_request = None;
         self.candidate_request = None;
+        self.prepared_candidate = None;
         clear_desired_state(&self.layout)
             .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))?;
         if keep_blocked {
