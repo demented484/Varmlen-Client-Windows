@@ -218,13 +218,37 @@ async fn failed_restore_keeps_the_hold_and_reports_blocked_error() {
 }
 
 #[tokio::test]
-async fn failed_initial_start_stays_blocked_until_explicit_disconnect() {
-    let backend = RecordingBackend::failing(&[Effect::StartCandidate]);
+async fn failed_initial_candidate_without_kill_switch_stops_candidate_and_opens_network() {
+    let backend = RecordingBackend::failing(&[Effect::VerifyCandidate]);
+    let mut controller = ConnectionController::disconnected(backend);
+    let mut request = valid_connect();
+    request.killswitch = false;
+
+    assert!(controller.connect(11, request).await.is_err());
+
+    assert_eq!(controller.state().phase, ConnectionPhase::Disconnected);
+    assert!(!controller.state().network_blocked);
+    assert_eq!(
+        controller.backend().effects(),
+        &[
+            Effect::Validate,
+            Effect::InstallHold,
+            Effect::VerifyHold,
+            Effect::StartCandidate,
+            Effect::VerifyCandidate,
+            Effect::ClearNetworkOpen,
+        ]
+    );
+}
+
+#[tokio::test]
+async fn failed_initial_candidate_with_kill_switch_stops_candidate_and_verifies_block() {
+    let backend = RecordingBackend::failing(&[Effect::VerifyCandidate]);
     let mut controller = ConnectionController::disconnected(backend);
 
-    assert!(controller.connect(11, valid_connect()).await.is_err());
+    assert!(controller.connect(12, valid_connect()).await.is_err());
 
-    assert_eq!(controller.state().phase, ConnectionPhase::BlockedError);
+    assert_eq!(controller.state().phase, ConnectionPhase::Blocked);
     assert!(controller.state().network_blocked);
     assert_eq!(
         controller.backend().effects(),
@@ -233,6 +257,8 @@ async fn failed_initial_start_stays_blocked_until_explicit_disconnect() {
             Effect::InstallHold,
             Effect::VerifyHold,
             Effect::StartCandidate,
+            Effect::VerifyCandidate,
+            Effect::ClearNetworkBlocked,
         ]
     );
 }
@@ -242,7 +268,7 @@ async fn failed_hold_install_does_not_stop_the_active_connection() {
     let backend = RecordingBackend::failing(&[Effect::InstallHold]);
     let mut controller = ConnectionController::connected(backend);
 
-    assert!(controller.connect(12, valid_connect()).await.is_err());
+    assert!(controller.connect(13, valid_connect()).await.is_err());
 
     assert_eq!(controller.state().phase, ConnectionPhase::Connected);
     assert_eq!(

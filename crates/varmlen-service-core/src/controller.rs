@@ -104,10 +104,29 @@ impl<B: ConnectionBackend + Send> ConnectionController<B> {
         &mut self,
         operation_id: u64,
         was_connected: bool,
+        requested_kill_switch: bool,
         previous_state: ServiceState,
     ) -> Result<(), ServiceError> {
         if !was_connected {
-            self.state = blocked_error_state(operation_id);
+            if let Err(error) = self
+                .backend
+                .clear_network_state(requested_kill_switch)
+                .await
+            {
+                self.state = blocked_error_state(operation_id);
+                return Err(error);
+            }
+            self.state = ServiceState {
+                phase: if requested_kill_switch {
+                    ConnectionPhase::Blocked
+                } else {
+                    ConnectionPhase::Disconnected
+                },
+                operation_id,
+                split_active: false,
+                dns_protected: false,
+                network_blocked: requested_kill_switch,
+            };
             return Ok(());
         }
 
@@ -163,18 +182,33 @@ impl<B: ConnectionBackend + Send> ConnectionController<B> {
 
         self.state.phase = ConnectionPhase::Starting;
         if let Err(error) = self.backend.start_candidate(&request).await {
-            self.recover_candidate_failure(operation_id, was_connected, previous_state)
-                .await?;
+            self.recover_candidate_failure(
+                operation_id,
+                was_connected,
+                request.killswitch,
+                previous_state,
+            )
+            .await?;
             return Err(error);
         }
         if let Err(error) = self.backend.verify_candidate(&request).await {
-            self.recover_candidate_failure(operation_id, was_connected, previous_state)
-                .await?;
+            self.recover_candidate_failure(
+                operation_id,
+                was_connected,
+                request.killswitch,
+                previous_state,
+            )
+            .await?;
             return Err(error);
         }
         if let Err(error) = self.backend.commit_policy(&request).await {
-            self.recover_candidate_failure(operation_id, was_connected, previous_state)
-                .await?;
+            self.recover_candidate_failure(
+                operation_id,
+                was_connected,
+                request.killswitch,
+                previous_state,
+            )
+            .await?;
             return Err(error);
         }
         if let Err(error) = self.backend.release_transition_hold().await {
