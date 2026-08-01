@@ -83,8 +83,8 @@ cargo xwin check --workspace --target aarch64-pc-windows-msvc
 The release artifacts are:
 
 ```text
-target/x86_64-pc-windows-msvc/release/bundle/nsis/Varmlen_0.1.0_x64-setup.exe
-target/aarch64-pc-windows-msvc/release/bundle/nsis/Varmlen_0.1.0_arm64-setup.exe
+target/x86_64-pc-windows-msvc/release/bundle/nsis/Varmlen_0.3.0_x64-setup.exe
+target/aarch64-pc-windows-msvc/release/bundle/nsis/Varmlen_0.3.0_arm64-setup.exe
 ```
 
 ## License

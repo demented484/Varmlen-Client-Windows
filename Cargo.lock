@@ -4440,7 +4440,7 @@ dependencies = [
 
 [[package]]
 name = "varmlen"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
@@ -4463,7 +4463,7 @@ dependencies = [
 
 [[package]]
 name = "varmlen-protocol"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4471,7 +4471,7 @@ dependencies = [
 
 [[package]]
 name = "varmlen-service"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "serde",
@@ -4485,7 +4485,7 @@ dependencies = [
 
 [[package]]
 name = "varmlen-service-core"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "serde_json",
