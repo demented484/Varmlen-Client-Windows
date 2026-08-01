@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use serde_json::json;
 use varmlen_service_core::runtime::{
-    inspect_native_tun_config, inspect_validation_config, AssetArch, PolicyMode, PolicySpec,
-    RuntimeLayout, DNS_FILTER_WEIGHT, LOOPBACK_FILTER_WEIGHT, XRAY_FILTER_WEIGHT,
+    inspect_native_tun_config, inspect_validation_config, rewrite_validation_ports, AssetArch,
+    PolicyMode, PolicySpec, RuntimeLayout, DNS_FILTER_WEIGHT, LOOPBACK_FILTER_WEIGHT,
+    XRAY_FILTER_WEIGHT,
 };
 
 fn native_config() -> String {
@@ -74,6 +75,11 @@ fn validation_config_must_only_listen_on_loopback_and_must_not_create_tun() {
     .to_string();
     let inspected = inspect_validation_config(&valid).expect("loopback validation");
     assert_eq!(inspected.socks_ports, vec![2081, 2082]);
+
+    let rewritten = rewrite_validation_ports(&valid, &[32_001, 32_002])
+        .expect("service-owned validation ports");
+    let inspected = inspect_validation_config(&rewritten).expect("rewritten validation config");
+    assert_eq!(inspected.socks_ports, vec![32_001, 32_002]);
 
     let public_listener = valid.replace("127.0.0.1", "0.0.0.0");
     assert!(inspect_validation_config(&public_listener)

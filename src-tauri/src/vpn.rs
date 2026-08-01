@@ -72,7 +72,7 @@ pub async fn vpn_connect(
             .map_err(|error| format!("serialize Xray config: {error}"))?;
 
     let proxy_count = ping_proxy_count(&server)?;
-    let validation_ports = unique_local_ports(proxy_count)?;
+    let validation_ports = validation_placeholder_ports(proxy_count)?;
     let validation_config =
         serde_json::to_string_pretty(&build_ping_config(&server, &validation_ports)?)
             .map_err(|error| format!("serialize Xray validation config: {error}"))?;
@@ -218,20 +218,11 @@ async fn resolve_server_endpoints(
     Ok(endpoints.into_iter().collect())
 }
 
-fn unique_local_ports(count: usize) -> Result<Vec<u16>, String> {
-    let mut ports = Vec::with_capacity(count);
-    while ports.len() < count {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")
-            .map_err(|error| format!("could not reserve validation port: {error}"))?;
-        let port = listener
-            .local_addr()
-            .map_err(|error| format!("could not read validation port: {error}"))?
-            .port();
-        if !ports.contains(&port) {
-            ports.push(port);
-        }
+fn validation_placeholder_ports(count: usize) -> Result<Vec<u16>, String> {
+    if !(1..=64).contains(&count) {
+        return Err(format!("invalid validation path count: {count}"));
     }
-    Ok(ports)
+    Ok((0..count).map(|index| 20_810 + index as u16).collect())
 }
 
 pub(crate) fn teardown_on_exit(_app: &tauri::AppHandle) {

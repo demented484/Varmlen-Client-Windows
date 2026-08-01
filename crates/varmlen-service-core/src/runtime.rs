@@ -191,6 +191,41 @@ pub fn inspect_validation_config(config: &str) -> Result<ValidationInspection, S
     Ok(ValidationInspection { socks_ports })
 }
 
+/// Replace only the validated loopback SOCKS ports. The privileged service
+/// uses this after reserving its own ephemeral ports, so an unprivileged GUI
+/// cannot race a stale bind/drop selection made in another process.
+pub fn rewrite_validation_ports(config: &str, ports: &[u16]) -> Result<String, String> {
+    let inspection = inspect_validation_config(config)?;
+    if ports.len() != inspection.socks_ports.len()
+        || ports.iter().any(|port| *port < 1024)
+        || ports.iter().copied().collect::<HashSet<_>>().len() != ports.len()
+    {
+        return Err(
+            "replacement validation ports must be unique, unprivileged, and complete".into(),
+        );
+    }
+    let mut root = parse_object(config, "validation Xray config")?;
+    let inbounds = root
+        .get_mut("inbounds")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| "validation Xray config has no inbounds array".to_string())?;
+    let mut replacements = ports.iter().copied();
+    for inbound in inbounds {
+        if inbound.get("protocol").and_then(Value::as_str) == Some("socks") {
+            inbound["port"] = serde_json::json!(replacements
+                .next()
+                .ok_or_else(|| "replacement validation port is missing".to_string())?);
+        }
+    }
+    if replacements.next().is_some() {
+        return Err("too many replacement validation ports".into());
+    }
+    let rewritten = serde_json::to_string(&Value::Object(root))
+        .map_err(|error| format!("could not serialize validation config: {error}"))?;
+    inspect_validation_config(&rewritten)?;
+    Ok(rewritten)
+}
+
 fn parse_object(config: &str, label: &str) -> Result<serde_json::Map<String, Value>, String> {
     serde_json::from_str::<Value>(config)
         .map_err(|error| format!("{label} is invalid JSON: {error}"))?

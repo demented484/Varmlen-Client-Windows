@@ -13,7 +13,9 @@ use tokio::{
     task::JoinSet,
     time::{sleep, timeout, Instant},
 };
-use varmlen_service_core::runtime::{inspect_validation_config, RuntimeLayout};
+use varmlen_service_core::runtime::{
+    inspect_validation_config, rewrite_validation_ports, RuntimeLayout,
+};
 use windows::{
     core::PCWSTR,
     Win32::{
@@ -149,32 +151,74 @@ pub async fn validate_config(layout: &RuntimeLayout, config: &str) -> io::Result
     ensure_state_directory(layout)?;
     let inspection = inspect_validation_config(config)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    atomic_write(&layout.validation_config, config.as_bytes())?;
-    let invocation = XrayInvocation::validation(
-        layout.xray_executable.clone(),
-        layout.validation_config.clone(),
-    );
-    validate_config_syntax(layout, &invocation).await?;
+    let mut last_error = None;
+    for _ in 0..4 {
+        let (reservations, ports) = reserve_validation_ports(inspection.socks_ports.len())?;
+        let rewritten = rewrite_validation_ports(config, &ports)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        atomic_write(&layout.validation_config, rewritten.as_bytes())?;
+        let invocation = XrayInvocation::validation(
+            layout.xray_executable.clone(),
+            layout.validation_config.clone(),
+        );
+        validate_config_syntax(layout, &invocation).await?;
 
-    let invocation = XrayInvocation::run(
-        layout.xray_executable.clone(),
-        layout.validation_config.clone(),
-    );
-    let mut command = command_for(&invocation);
-    command
-        .current_dir(&layout.install_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    let job = OwnedJob::new()?;
-    let mut child = command.spawn()?;
-    job.assign(&child)?;
+        // Xray cannot inherit these listener sockets. Release them immediately
+        // before spawn and retry the complete reservation/start sequence if a
+        // local process steals a port in that narrow interval.
+        drop(reservations);
+        let invocation = XrayInvocation::run(
+            layout.xray_executable.clone(),
+            layout.validation_config.clone(),
+        );
+        let mut command = command_for(&invocation);
+        command
+            .current_dir(&layout.install_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let job = OwnedJob::new()?;
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                last_error = Some(error);
+                continue;
+            }
+        };
+        if let Err(error) = job.assign(&child) {
+            stop_child(&mut child).await;
+            return Err(error);
+        }
 
-    let probe_result = wait_for_socks_reachability(&mut child, &inspection.socks_ports).await;
-    stop_child(&mut child).await;
-    drop(job);
-    probe_result
+        let result = wait_for_socks_reachability(&mut child, &ports).await;
+        stop_child(&mut child).await;
+        drop(job);
+        match result {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::AddrInUse,
+            "could not start Xray on service-owned validation ports",
+        )
+    }))
+}
+
+fn reserve_validation_ports(count: usize) -> io::Result<(Vec<std::net::TcpListener>, Vec<u16>)> {
+    let mut reservations = Vec::with_capacity(count);
+    let mut ports = Vec::with_capacity(count);
+    while reservations.len() < count {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let port = listener.local_addr()?.port();
+        if !ports.contains(&port) {
+            ports.push(port);
+            reservations.push(listener);
+        }
+    }
+    Ok((reservations, ports))
 }
 
 async fn validate_config_syntax(
