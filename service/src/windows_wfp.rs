@@ -68,7 +68,16 @@ impl WfpEngine {
                 )?;
             }
             Ok(())
-        })
+        })?;
+        let remaining = self.provider_filter_keys()?;
+        if remaining.is_empty() {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "{} Varmlen WFP filters remain after cleanup",
+                remaining.len()
+            )))
+        }
     }
 
     fn ensure_provider_and_sublayer(&self) -> io::Result<()> {

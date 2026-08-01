@@ -15,7 +15,7 @@ use varmlen_protocol::{
     ServiceErrorCode, ServiceState, MAX_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use varmlen_service_core::{
-    controller::{ConnectionBackend, ConnectionController},
+    controller::ConnectionController,
     framing::{read_payload, write_payload},
     handler::{handle_payload, CommandExecutor},
 };
@@ -43,6 +43,7 @@ use crate::{
         pipe_security_descriptor_sddl, InstalledUserSid, PipeClientIdentity, CLIENT_IO_TIMEOUT,
         MAX_CONCURRENT_CLIENTS,
     },
+    state_record::DesiredStatePhase,
     windows_backend::WindowsBackend,
     windows_state::load_desired_state,
     PIPE_NAME,
@@ -84,21 +85,46 @@ pub struct RuntimeExecutor {
 impl RuntimeExecutor {
     pub async fn open() -> io::Result<Self> {
         let backend = WindowsBackend::open()?;
-        let desired = load_desired_state(backend.layout())?;
+        let desired = load_desired_state(backend.layout());
         let mut controller = ConnectionController::disconnected(backend);
-        if let Some(record) = desired {
-            if controller
-                .connect(record.operation_id, record.request)
-                .await
-                .is_err()
-            {
-                controller
-                    .backend_mut()
-                    .install_transition_hold()
-                    .await
-                    .map_err(|error| io::Error::other(error.message))?;
-                controller.force_blocked(record.operation_id);
+        let (operation_id, recovery) = match desired {
+            Ok(Some(record)) => {
+                let operation_id = record.operation_id;
+                let recovery = match record.phase {
+                    DesiredStatePhase::Connected { request } => {
+                        controller.connect(operation_id, request).await
+                    }
+                    DesiredStatePhase::Connecting {
+                        previous: Some(previous),
+                        ..
+                    } => controller.connect(operation_id, previous).await,
+                    DesiredStatePhase::Connecting {
+                        requested_kill_switch,
+                        ..
+                    } => {
+                        controller
+                            .disconnect(operation_id, requested_kill_switch)
+                            .await
+                    }
+                    DesiredStatePhase::Disconnecting { keep_blocked } => {
+                        controller.disconnect(operation_id, keep_blocked).await
+                    }
+                    DesiredStatePhase::Blocked { .. } => {
+                        controller.disconnect(operation_id, true).await
+                    }
+                    DesiredStatePhase::Disconnected => {
+                        controller.disconnect(operation_id, false).await
+                    }
+                };
+                (operation_id, recovery)
             }
+            Ok(None) => (0, controller.disconnect(0, false).await),
+            Err(_) => (0, controller.disconnect(0, false).await),
+        };
+        if recovery.is_err() {
+            // Keep the recovery IPC available even when startup reconciliation
+            // cannot prove a safe terminal state.
+            controller.force_blocked(operation_id);
         }
         Ok(Self {
             controller: Mutex::new(controller),

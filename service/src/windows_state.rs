@@ -1,13 +1,19 @@
 use std::{
     fs, io,
+    os::windows::ffi::OsStrExt,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use varmlen_service_core::runtime::RuntimeLayout;
-use windows::Win32::{
-    Foundation::{LocalFree, HLOCAL},
-    Security::Cryptography::{
-        CryptProtectData, CryptUnprotectData, CRYPTPROTECT_LOCAL_MACHINE, CRYPT_INTEGER_BLOB,
+use windows::{
+    core::PCWSTR,
+    Win32::{
+        Foundation::{LocalFree, HLOCAL},
+        Security::Cryptography::{
+            CryptProtectData, CryptUnprotectData, CRYPTPROTECT_LOCAL_MACHINE, CRYPT_INTEGER_BLOB,
+        },
+        Storage::FileSystem::{MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH},
     },
 };
 
@@ -65,23 +71,44 @@ pub fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
     fs::create_dir_all(parent)?;
-    let temporary = path.with_extension("tmp");
+    static NEXT_TEMPORARY: AtomicU64 = AtomicU64::new(1);
+    let filename = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no filename"))?
+        .to_string_lossy();
+    let temporary = parent.join(format!(
+        ".{filename}.{}.{}.tmp",
+        std::process::id(),
+        NEXT_TEMPORARY.fetch_add(1, Ordering::Relaxed)
+    ));
     {
         let mut options = fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
+        options.write(true).create_new(true);
         let mut file = options.open(&temporary)?;
         use io::Write;
         file.write_all(contents)?;
         file.sync_all()?;
     }
-    match fs::rename(&temporary, path) {
-        Ok(()) => Ok(()),
-        Err(first_error) if path.exists() => {
-            fs::remove_file(path)?;
-            fs::rename(&temporary, path).map_err(|_| first_error)
-        }
-        Err(error) => Err(error),
+    let source = wide_path(&temporary);
+    let destination = wide_path(path);
+    // SAFETY: both UTF-16 buffers are NUL terminated and remain alive for the
+    // duration of the call. The temporary file is on the same volume.
+    let replaced = unsafe {
+        MoveFileExW(
+            PCWSTR(source.as_ptr()),
+            PCWSTR(destination.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if let Err(error) = replaced {
+        let _ = fs::remove_file(&temporary);
+        return Err(io::Error::other(error));
     }
+    Ok(())
+}
+
+fn wide_path(path: &Path) -> Vec<u16> {
+    path.as_os_str().encode_wide().chain(Some(0)).collect()
 }
 
 fn protect_machine(cleartext: &[u8]) -> io::Result<Vec<u8>> {

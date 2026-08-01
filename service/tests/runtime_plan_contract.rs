@@ -8,7 +8,9 @@ use varmlen_service::{
         socks5_ipv4_connect_request, validate_socks5_connect_header, validate_socks5_method_reply,
         XrayConfigTransaction, XrayInvocation, XrayInvocationKind,
     },
-    state_record::{decode_desired_state, encode_desired_state, DesiredStateRecord},
+    state_record::{
+        decode_desired_state, encode_desired_state, DesiredStatePhase, DesiredStateRecord,
+    },
 };
 
 fn request() -> ConnectRequest {
@@ -89,29 +91,79 @@ fn native_preflight_and_candidate_start_use_the_same_config_file() {
 
 #[test]
 fn desired_state_round_trip_preserves_operation_and_policy() {
-    let record = DesiredStateRecord {
-        format_version: DesiredStateRecord::FORMAT_VERSION,
-        operation_id: 918,
-        request: request(),
-    };
+    let candidate = request();
+    let mut previous = request();
+    previous.allow_lan = true;
+    let record = DesiredStateRecord::connecting(
+        918,
+        candidate.clone(),
+        Some(previous.clone()),
+        candidate.killswitch,
+    );
     let bytes = encode_desired_state(&record).expect("encode");
     let decoded = decode_desired_state(&bytes).expect("decode");
     assert_eq!(decoded, record);
+    assert_eq!(
+        decoded.phase,
+        DesiredStatePhase::Connecting {
+            candidate,
+            previous: Some(previous),
+            requested_kill_switch: true,
+        }
+    );
 }
 
 #[test]
 fn desired_state_rejects_unknown_versions_and_trailing_data() {
-    let mut record = DesiredStateRecord {
-        format_version: DesiredStateRecord::FORMAT_VERSION + 1,
-        operation_id: 1,
-        request: request(),
-    };
+    let mut record = DesiredStateRecord::connected(1, request());
+    record.format_version = DesiredStateRecord::FORMAT_VERSION + 1;
     assert!(encode_desired_state(&record).is_err());
 
     record.format_version = DesiredStateRecord::FORMAT_VERSION;
     let mut bytes = encode_desired_state(&record).expect("encode");
     bytes.extend_from_slice(b"secret trailing material");
     assert!(decode_desired_state(&bytes).is_err());
+}
+
+#[test]
+fn journal_has_explicit_safe_terminal_states() {
+    let disconnected = DesiredStateRecord::disconnected(5);
+    assert_eq!(disconnected.phase, DesiredStatePhase::Disconnected);
+
+    let blocked = DesiredStateRecord::blocked(6, "candidate failed");
+    assert_eq!(
+        blocked.phase,
+        DesiredStatePhase::Blocked {
+            reason: "candidate failed".into()
+        }
+    );
+
+    let disconnecting = DesiredStateRecord::disconnecting(7, true);
+    assert_eq!(
+        disconnecting.phase,
+        DesiredStatePhase::Disconnecting { keep_blocked: true }
+    );
+}
+
+#[test]
+fn version_one_connected_state_is_migrated_to_the_journal() {
+    let request = request();
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "format_version": 1,
+        "operation_id": 81,
+        "request": request,
+    }))
+    .expect("legacy payload");
+    let mut encoded = b"VRMLNST1".to_vec();
+    encoded.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    encoded.extend_from_slice(&payload);
+
+    let migrated = decode_desired_state(&encoded).expect("migrate v1");
+    assert_eq!(migrated.format_version, DesiredStateRecord::FORMAT_VERSION);
+    assert!(matches!(
+        migrated.phase,
+        DesiredStatePhase::Connected { .. }
+    ));
 }
 
 #[test]

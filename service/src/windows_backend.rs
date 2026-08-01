@@ -17,9 +17,7 @@ use crate::{
     state_record::DesiredStateRecord,
     windows_adapter::{find_varmlen_adapter, AdapterInfo},
     windows_process::{prepare_native_config, validate_config, ManagedXray, PreparedXrayConfig},
-    windows_state::{
-        clear_desired_state, ensure_state_directory, persist_desired_state, runtime_layout,
-    },
+    windows_state::{ensure_state_directory, persist_desired_state, runtime_layout},
     windows_wfp::WfpEngine,
 };
 
@@ -157,6 +155,22 @@ impl ConnectionBackend for WindowsBackend {
     }
 
     async fn install_transition_hold(&mut self) -> Result<(), ServiceError> {
+        let candidate = self.candidate_request.clone().ok_or_else(|| {
+            service_error(
+                ServiceErrorCode::Internal,
+                "candidate request missing before transition hold",
+            )
+        })?;
+        persist_desired_state(
+            &self.layout,
+            &DesiredStateRecord::connecting(
+                self.pending_operation_id,
+                candidate.clone(),
+                self.active_request.clone(),
+                candidate.killswitch,
+            ),
+        )
+        .map_err(|error| service_error(ServiceErrorCode::Internal, error))?;
         self.wfp
             .apply_policy(&self.hold_policy())
             .map_err(|error| service_error(ServiceErrorCode::HoldFailed, error))
@@ -217,16 +231,16 @@ impl ConnectionBackend for WindowsBackend {
         self.connected_health_check()
             .await
             .map_err(|error| service_error(ServiceErrorCode::HealthCheckFailed, error))?;
-        persist_desired_state(
-            &self.layout,
-            &DesiredStateRecord::new(self.pending_operation_id, request.clone()),
-        )
-        .map_err(|error| service_error(ServiceErrorCode::Internal, error))?;
         self.prepared_candidate
             .as_ref()
             .ok_or_else(|| service_error(ServiceErrorCode::Internal, "candidate config missing"))?
             .persist_active()
             .map_err(|error| service_error(ServiceErrorCode::Internal, error))?;
+        persist_desired_state(
+            &self.layout,
+            &DesiredStateRecord::connected(self.pending_operation_id, request.clone()),
+        )
+        .map_err(|error| service_error(ServiceErrorCode::Internal, error))?;
         self.active_request = Some(request.clone());
         self.previous_request = None;
         self.candidate_request = None;
@@ -268,6 +282,11 @@ impl ConnectionBackend for WindowsBackend {
         self.connected_health_check()
             .await
             .map_err(|error| service_error(ServiceErrorCode::RestoreFailed, error))?;
+        persist_desired_state(
+            &self.layout,
+            &DesiredStateRecord::connected(self.pending_operation_id, previous.clone()),
+        )
+        .map_err(|error| service_error(ServiceErrorCode::RestoreFailed, error))?;
         self.active_request = Some(previous);
         self.candidate_request = None;
         self.prepared_candidate = None;
@@ -275,6 +294,11 @@ impl ConnectionBackend for WindowsBackend {
     }
 
     async fn clear_network_state(&mut self, keep_blocked: bool) -> Result<(), ServiceError> {
+        persist_desired_state(
+            &self.layout,
+            &DesiredStateRecord::disconnecting(self.pending_operation_id, keep_blocked),
+        )
+        .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))?;
         self.stop_process()
             .await
             .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))?;
@@ -282,16 +306,27 @@ impl ConnectionBackend for WindowsBackend {
         self.previous_request = None;
         self.candidate_request = None;
         self.prepared_candidate = None;
-        clear_desired_state(&self.layout)
-            .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))?;
         if keep_blocked {
             self.wfp
                 .apply_policy(&self.hold_policy())
-                .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))
+                .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))?;
+            persist_desired_state(
+                &self.layout,
+                &DesiredStateRecord::blocked(
+                    self.pending_operation_id,
+                    "kill switch requested while disconnected",
+                ),
+            )
+            .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))
         } else {
             self.wfp
                 .clear_filters()
-                .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))
+                .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))?;
+            persist_desired_state(
+                &self.layout,
+                &DesiredStateRecord::disconnected(self.pending_operation_id),
+            )
+            .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))
         }
     }
 
