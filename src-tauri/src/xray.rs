@@ -945,8 +945,7 @@ fn build_route_rules(
     }
 
     // 3. Per-app split. Xray's Windows process finder handles local TCP and
-    // UDP sockets. A normalized path ending in `/` recursively matches every
-    // game executable under that selected install folder.
+    // UDP sockets and accepts normalized forward-slash executable paths.
     for app in split.enabled_apps() {
         let mut rule = json!({ "type": "field", "process": [app] });
         if apps_use_proxy {
@@ -1667,21 +1666,6 @@ mod tests {
         let domains = site_rule["domain"].as_array().unwrap();
         assert!(domains.contains(&json!("domain:ru")));
         assert!(domains.contains(&json!("full:example.com")));
-    }
-
-    #[test]
-    fn game_folder_selector_keeps_recursive_trailing_slash() {
-        let server = parse_proxy_uri("vless://u@1.2.3.4:443?security=reality&pbk=K#X").unwrap();
-        let split = SplitInput {
-            apps_mode: "selective".into(),
-            apps: vec!["C:/XboxGames/Call of Duty/Content/".into()],
-            ..Default::default()
-        };
-        let config = build_xray_config(&server, &split, true, "warning");
-        assert_eq!(
-            rule_for(&config, "process").unwrap()["process"][0],
-            "C:/XboxGames/Call of Duty/Content/"
-        );
     }
 
     #[test]

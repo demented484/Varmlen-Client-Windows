@@ -38,9 +38,9 @@ tunneling. Built on Tauri 2 and SvelteKit.
 - Xray configuration syntax and actual SOCKS5 reachability are checked before
   the native TUN is changed.
 - Application discovery covers 32/64-bit registry views, Steam install folders
-  and `XboxGames` libraries. Games use recursive folder selectors so campaign
-  and multiplayer child executables share one entry; manual `.exe` selection
-  remains available.
+  and `XboxGames` libraries. Every suggested or manually selected entry is one
+  exact `.exe`; additional campaign/multiplayer binaries can be added with the
+  file picker.
 - The kill switch is deliberately disabled in this preview while the previous
   user-mode WFP enforcement is replaced.
 

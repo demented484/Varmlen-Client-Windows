@@ -148,13 +148,12 @@ impl ConnectionBackend for WindowsBackend {
         inspect_validation_config(&request.validation_config)
             .map_err(|error| service_error(ServiceErrorCode::ValidationFailed, error))?;
         for app in &request.excluded_apps {
-            let path_text = app.canonical_path.trim_end_matches(['\\', '/']);
-            let path = PathBuf::from(path_text);
-            if !path.is_absolute() || (!path.is_file() && !path.is_dir()) {
+            let path = PathBuf::from(&app.canonical_path);
+            if !path.is_absolute() || !path.is_file() {
                 return Err(service_error(
                     ServiceErrorCode::ValidationFailed,
                     format!(
-                        "split-tunnel application or folder does not exist or is not absolute: {}",
+                        "excluded application does not exist or is not absolute: {}",
                         path.display()
                     ),
                 ));

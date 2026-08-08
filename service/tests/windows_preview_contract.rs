@@ -21,12 +21,12 @@ fn preview_connection_does_not_depend_on_user_mode_wfp_filters() {
 }
 
 #[test]
-fn native_tun_is_pinned_to_windows_route_and_game_folders_are_valid_selectors() {
+fn native_tun_is_pinned_to_windows_route_and_split_selectors_stay_exact() {
     assert!(BACKEND.contains("best_outbound_interface_name"));
     assert!(BACKEND.contains("rewrite_native_outbound_interface"));
     assert!(ADAPTER.contains("GetBestInterfaceEx"));
-    assert!(VPN_BRIDGE.contains("canonical.is_dir()"));
-    assert!(VPN_BRIDGE.contains("canonical_path.push('\\\\')"));
+    assert!(VPN_BRIDGE.contains("if !canonical.is_file()"));
+    assert!(!VPN_BRIDGE.contains("canonical_path.push('\\\\')"));
 }
 
 #[test]

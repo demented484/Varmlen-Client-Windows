@@ -159,17 +159,17 @@ fn collect_uninstall_entries(applications: &mut std::collections::BTreeMap<Strin
                     .map(|location| PathBuf::from(location.trim_matches('"')))
                     .filter(|location| location.is_dir());
 
-                // A game is a process family, not only its launcher. Represent
-                // Steam/Xbox installs by their folder so Xray's trailing-slash
-                // process matcher covers multiplayer, campaign and helper child
-                // binaries without showing a misleading installer executable.
+                // Steam/Xbox registry records frequently point DisplayIcon at
+                // an installer or cleaner. Discover one concrete main game EXE;
+                // users can add any additional campaign/multiplayer EXEs with
+                // the file picker when they want separate process rules.
                 if let Some(location) = install_location
                     .as_deref()
                     .filter(|location| is_game_install_directory(location))
                 {
                     insert_app(
                         applications,
-                        app_from_directory(location, Some(&display_name)),
+                        app_from_game_directory(location, Some(&display_name)),
                     );
                     continue;
                 }
@@ -223,14 +223,14 @@ fn collect_xbox_games(applications: &mut std::collections::BTreeMap<String, Inst
             let name = xbox_display_name(selector).unwrap_or_else(|| fallback.to_string());
             insert_app(
                 applications,
-                app_from_directory(selector, Some(name.as_str())),
+                app_from_game_directory(selector, Some(name.as_str())),
             );
         }
     }
 }
 
 #[cfg(windows)]
-fn app_from_directory(directory: &Path, display_name: Option<&str>) -> Option<InstalledApp> {
+fn app_from_game_directory(directory: &Path, display_name: Option<&str>) -> Option<InstalledApp> {
     let directory = strip_verbatim_prefix(std::fs::canonicalize(directory).ok()?);
     if !directory.is_dir() {
         return None;
@@ -238,20 +238,17 @@ fn app_from_directory(directory: &Path, display_name: Option<&str>) -> Option<In
     let fallback_name = directory
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("Application folder");
+        .unwrap_or("Game");
     let name = display_name
         .map(str::trim)
         .filter(|name| !name.is_empty())
-        .unwrap_or(fallback_name)
-        .to_string();
-    let icon = directory_icon(&directory).or_else(|| {
-        find_primary_executable(&directory, &name).and_then(|path| executable_icon(&path))
-    });
-    Some(InstalledApp {
-        id: directory.to_string_lossy().into_owned(),
-        name,
-        icon,
-    })
+        .unwrap_or(fallback_name);
+    let executable = find_primary_executable(&directory, name)?;
+    let mut app = app_from_path(&executable, Some(name))?;
+    if app.icon.is_none() {
+        app.icon = directory_icon(&directory);
+    }
+    Some(app)
 }
 
 #[cfg(windows)]
@@ -412,6 +409,7 @@ fn is_helper_executable(path: &Path) -> bool {
         "crash",
         "install",
         "cleaner",
+        "helper",
         "report",
         "setup",
         "unins",

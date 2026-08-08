@@ -170,28 +170,20 @@ fn resolve_app_selectors(paths: &[String]) -> Result<Vec<AppSelector>, String> {
     {
         let canonical = std::fs::canonicalize(raw)
             .map_err(|error| format!("cannot resolve split-tunnel app {raw}: {error}"))?;
-        if !canonical.is_file() && !canonical.is_dir() {
+        if !canonical.is_file() {
             return Err(format!(
-                "split-tunnel selector is not a file or directory: {}",
+                "split-tunnel app is not a file: {}",
                 canonical.display()
             ));
         }
-        let is_directory = canonical.is_dir();
         let canonical = strip_verbatim_prefix(canonical);
         let basename = canonical
             .file_name()
             .and_then(|name| name.to_str())
             .filter(|name| !name.is_empty())
-            .ok_or_else(|| format!("split-tunnel selector has no name: {raw}"))?
+            .ok_or_else(|| format!("split-tunnel app has no executable name: {raw}"))?
             .to_string();
-        let mut canonical_path = canonical.to_string_lossy().into_owned();
-        // Xray interprets a trailing slash as a recursive process-folder
-        // matcher. This lets one game entry cover campaign/multiplayer child
-        // executables while retaining exact full-path isolation between games
-        // that reuse names such as cod.exe.
-        if is_directory && !canonical_path.ends_with(['\\', '/']) {
-            canonical_path.push('\\');
-        }
+        let canonical_path = canonical.to_string_lossy().into_owned();
         if unique.insert(canonical_path.to_ascii_lowercase()) {
             selectors.push(AppSelector {
                 canonical_path,

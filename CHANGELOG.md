@@ -4,9 +4,9 @@
 
 - Pin native-TUN outbound sockets to the physical interface selected by the
   Windows route table, avoiding DNS/Reality loops through Hyper-V or WSL NICs.
-- Discover XboxGames installations, represent Steam/Xbox games as recursive
-  process folders, use real game/package icons, and show only the executable
-  name or `*.exe` while retaining the full path in a tooltip.
+- Discover XboxGames installations, avoid installer/cleaner executables when
+  choosing the main Steam/Xbox game binary, use real game/package icons, and
+  show only the executable name while retaining the full path in a tooltip.
 - Import share links for every supported Xray proxy outbound: add Hysteria2,
   WireGuard, HTTP and SOCKS5 URI parsing plus standard WireGuard config files.
 - Reject subscription and JSON settings that disable TLS certificate or
