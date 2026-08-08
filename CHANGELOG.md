@@ -2,6 +2,10 @@
 
 ## 0.3.0 Preview
 
+- Reject subscription and JSON settings that disable TLS certificate or
+  hostname validation; strengthen subscription SSRF, redirect, and size checks.
+- Harden the Windows service DACL and allow uninstall to continue when a
+  partially removed installation no longer has a registered service.
 - Remove user-mode WFP filters from the active Windows connection path after
   real-system failures prevented both VPN startup and clean uninstallation.
 - Keep legacy WFP cleanup for upgrades, but enumerate without a restrictive

@@ -3,8 +3,9 @@
 //! Xray owns the whole Windows data plane: its native `tun` inbound creates the
 //! Wintun adapter, assigns dual-stack gateways and DNS, installs the default
 //! routes, and binds its own outbound sockets to the physical interface. Xray
-//! routing handles site and process split rules; the LocalSystem service adds
-//! transactional WFP leak protection and lifecycle recovery.
+//! routing handles site and process split rules. The LocalSystem service owns
+//! lifecycle and recovery; this preview intentionally has no fail-closed WFP
+//! enforcement.
 
 use serde_json::{json, Value};
 
@@ -185,6 +186,9 @@ fn sanitize_raw_outbound(outbound: &Value, preserve_tag_and_chains: bool) -> Res
     if contains_forbidden_provider_file_reference(outbound) {
         return Err("JSON proxy outbound may not reference local files".into());
     }
+    if contains_insecure_tls_override(outbound) {
+        return Err("JSON proxy outbound may not disable TLS certificate validation".into());
+    }
     let mut object = outbound
         .as_object()
         .cloned()
@@ -241,6 +245,25 @@ fn contains_forbidden_provider_file_reference(value: &Value) -> bool {
         Value::Array(items) => items.iter().any(contains_forbidden_provider_file_reference),
         _ => false,
     }
+}
+
+fn contains_insecure_tls_override(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => object.iter().any(|(key, value)| {
+            (key.eq_ignore_ascii_case("allowInsecure") && insecure_json_value(value))
+                || contains_insecure_tls_override(value)
+        }),
+        Value::Array(items) => items.iter().any(contains_insecure_tls_override),
+        _ => false,
+    }
+}
+
+fn insecure_json_value(value: &Value) -> bool {
+    value.as_bool() == Some(true)
+        || value.as_u64().is_some_and(|number| number != 0)
+        || value
+            .as_str()
+            .is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true"))
 }
 
 fn provider_proxy_outbounds(profile: &Value) -> Result<Vec<Value>, String> {
@@ -405,18 +428,18 @@ pub fn validate_server(server: &VlessServer) -> Result<(), String> {
         return Ok(());
     }
     if let Some(raw_outbound) = server.raw_outbound.as_ref() {
-        let protocol = raw_outbound
-            .get("protocol")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "JSON location has no outbound protocol".to_string())?
-            .to_ascii_lowercase();
-        if !is_proxy_protocol(&protocol) {
-            return Err(format!("unsupported proxy protocol in JSON: {protocol}"));
-        }
+        sanitize_raw_outbound(raw_outbound, false)?;
         return Ok(());
     }
 
     let protocol = server.protocol.to_ascii_lowercase();
+    if server
+        .raw_params
+        .get("allowInsecure")
+        .is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true"))
+    {
+        return Err("TLS certificate validation cannot be disabled".into());
+    }
     if !is_proxy_protocol(&protocol) {
         return Err(format!("unsupported protocol: {}", server.protocol));
     }
@@ -487,8 +510,9 @@ fn split_list(raw: &str) -> Vec<String> {
         .collect()
 }
 
-/// Build the `streamSettings` object: security (reality/tls/none) + the
-/// transport-specific block + `sockopt.mark` (anti-loop).
+/// Build the `streamSettings` object: security (reality/tls/none) and the
+/// transport-specific block. Native TUN interface selection prevents loops on
+/// Windows; Linux-only socket marks are deliberately absent.
 fn build_stream_settings(s: &VlessServer) -> Value {
     let network = xray_network(&s.transport);
     let server_name = s
@@ -527,12 +551,9 @@ fn build_stream_settings(s: &VlessServer) -> Value {
             let mut tls = serde_json::Map::new();
             tls.insert("serverName".into(), json!(server_name));
             tls.insert("fingerprint".into(), json!(fp));
-            // `allowInsecure=1` disables cert validation (test servers only).
-            let insecure = matches!(
-                s.raw_params.get("allowInsecure").map(String::as_str),
-                Some("1") | Some("true")
-            );
-            tls.insert("allowInsecure".into(), json!(insecure));
+            // Certificate and hostname validation are never optional. Provider
+            // input requesting allowInsecure is rejected by validate_server.
+            tls.insert("allowInsecure".into(), json!(false));
             if let Some(alpn) = s.raw_params.get("alpn").filter(|a| !a.is_empty()) {
                 tls.insert("alpn".into(), json!(split_list(alpn)));
             }
@@ -1332,6 +1353,41 @@ mod tests {
         assert!(validate_server(&server)
             .unwrap_err()
             .contains("may not reference local files"));
+    }
+
+    #[test]
+    fn tls_validation_cannot_be_disabled_by_share_links_or_json() {
+        let share =
+            parse_proxy_uri("vless://uuid@vpn.example:443?security=tls&allowInsecure=1#Unsafe")
+                .unwrap();
+        assert!(validate_server(&share)
+            .unwrap_err()
+            .contains("certificate validation cannot be disabled"));
+
+        let profile = json!({
+            "outbounds": [{
+                "tag": "proxy",
+                "protocol": "vless",
+                "settings": {"address": "vpn.example", "port": 443, "id": "uuid"},
+                "streamSettings": {
+                    "security": "tls",
+                    "tlsSettings": {"serverName": "vpn.example", "allowInsecure": true}
+                }
+            }]
+        });
+        let server = parse_subscription(&profile.to_string()).remove(0);
+        assert!(validate_server(&server)
+            .unwrap_err()
+            .contains("may not disable TLS certificate validation"));
+
+        let raw_outbound = profile["outbounds"][0].clone();
+        let server = parse_subscription(&raw_outbound.to_string()).remove(0);
+        assert!(validate_server(&server)
+            .unwrap_err()
+            .contains("may not disable TLS certificate validation"));
+
+        let safe = stream_for("vless://uuid@vpn.example:443?security=tls&sni=vpn.example#Safe");
+        assert_eq!(safe["tlsSettings"]["allowInsecure"], false);
     }
 
     #[test]

@@ -98,8 +98,8 @@ pub async fn vpn_connect(
 #[tauri::command]
 pub async fn vpn_disconnect() -> Result<HelperResponse, String> {
     let _operation = vpn_op_lock().lock().await;
-    // An explicit power-button disconnect restores ordinary networking. The
-    // service keeps a persistent hold only for an unexpected tunnel failure.
+    // An explicit power-button disconnect restores ordinary networking. This
+    // preview has no persistent fail-closed hold.
     service_client::disconnect(false).await.map(response)
 }
 
@@ -144,10 +144,15 @@ pub async fn tcp_ping_host(
     port: u16,
     timeout_ms: Option<u32>,
 ) -> Result<u32, String> {
+    let host = host.trim();
+    if host.is_empty() || host.len() > 253 || host.as_bytes().contains(&0) || port == 0 {
+        return Err("invalid TCP ping target".into());
+    }
+    let timeout_ms = timeout_ms.unwrap_or(2500).clamp(100, 10_000);
     let started = Instant::now();
     tokio::time::timeout(
-        Duration::from_millis(timeout_ms.unwrap_or(2500) as u64),
-        tokio::net::TcpStream::connect((host.as_str(), port)),
+        Duration::from_millis(timeout_ms as u64),
+        tokio::net::TcpStream::connect((host, port)),
     )
     .await
     .map_err(|_| "TCP ping timed out".to_string())?

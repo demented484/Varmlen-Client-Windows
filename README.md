@@ -53,7 +53,8 @@ The connection path does not install WFP filters. The service and uninstaller
 retain bounded best-effort cleanup for policy left by earlier preview builds;
 a cleanup warning never prevents the user from uninstalling Varmlen.
 
-See [the architecture](docs/design/2026-07-29-windows-client.md).
+See [the architecture](docs/design/2026-07-29-windows-client.md) and the
+[Windows security/reliability audit](docs/security-audit-2026-08-08.md).
 
 ## Local build
 

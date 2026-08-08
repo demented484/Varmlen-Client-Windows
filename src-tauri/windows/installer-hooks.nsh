@@ -80,7 +80,16 @@
     Abort
   ${EndIf}
 
-  nsExec::ExecToLog 'sc.exe description VarmlenService "Native TUN, DNS and WFP enforcement for Varmlen"'
+  nsExec::ExecToStack 'sc.exe sdset VarmlenService "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)"'
+  Pop $0
+  Pop $2
+  ${If} $0 != 0
+    !insertmacro VARMLEN_ROLLBACK_SERVICE
+    MessageBox MB_ICONSTOP "Varmlen could not harden its Windows service permissions.$\r$\n$2"
+    Abort
+  ${EndIf}
+
+  nsExec::ExecToLog 'sc.exe description VarmlenService "Native Xray TUN and DNS routing for Varmlen"'
   nsExec::ExecToLog 'sc.exe failure VarmlenService reset= 86400 actions= restart/2000/restart/5000/restart/10000'
   nsExec::ExecToStack 'sc.exe start VarmlenService'
   Pop $0
@@ -110,12 +119,19 @@
     DetailPrint "Legacy WFP cleanup warning: $1"
     MessageBox MB_ICONEXCLAMATION "Varmlen could not fully remove its legacy WFP metadata. Uninstallation will continue; no Varmlen WFP policy is used by this build.$\r$\n$1"
   ${EndIf}
-  nsExec::ExecToStack 'sc.exe delete VarmlenService'
+  nsExec::ExecToStack 'sc.exe query VarmlenService'
   Pop $0
   Pop $1
-  ${If} $0 != 0
-    MessageBox MB_ICONSTOP "Varmlen could not remove its Windows service.$\r$\n$1"
-    Abort
+  ${If} $0 == 0
+    nsExec::ExecToStack 'sc.exe delete VarmlenService'
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+      MessageBox MB_ICONSTOP "Varmlen could not remove its Windows service.$\r$\n$1"
+      Abort
+    ${EndIf}
+  ${Else}
+    DetailPrint "VarmlenService is already absent; continuing uninstallation."
   ${EndIf}
 !macroend
 

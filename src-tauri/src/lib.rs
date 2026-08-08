@@ -25,21 +25,41 @@ fn parse_subscription_body(body: String) -> Vec<VlessServer> {
     parse_subscription(&body)
 }
 
+const MAX_SUB_BYTES: usize = 8 * 1024 * 1024;
+
 fn is_blocked_ip(address: std::net::IpAddr) -> bool {
     match address {
         std::net::IpAddr::V4(v4) => {
+            let octets = v4.octets();
             v4.is_loopback()
                 || v4.is_private()
                 || v4.is_link_local()
                 || v4.is_unspecified()
                 || v4.is_broadcast()
-                || (v4.octets()[0] == 100 && (64..=127).contains(&v4.octets()[1]))
+                || v4.is_multicast()
+                || octets[0] == 0
+                || (octets[0] == 100 && (64..=127).contains(&octets[1]))
+                || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
+                || (octets[0] == 192 && octets[1] == 0 && octets[2] == 2)
+                || (octets[0] == 198 && (octets[1] == 18 || octets[1] == 19))
+                || (octets[0] == 198 && octets[1] == 51 && octets[2] == 100)
+                || (octets[0] == 203 && octets[1] == 0 && octets[2] == 113)
+                || octets[0] >= 240
         }
         std::net::IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_blocked_ip(std::net::IpAddr::V4(v4));
+            }
+            let octets = v6.octets();
             v6.is_loopback()
                 || v6.is_unspecified()
-                || (v6.octets()[0] & 0xfe) == 0xfc
-                || (v6.octets()[0] == 0xfe && (v6.octets()[1] & 0xc0) == 0x80)
+                || v6.is_multicast()
+                || (octets[0] & 0xfe) == 0xfc
+                || (octets[0] == 0xfe && (octets[1] & 0xc0) == 0x80)
+                || (octets[0] == 0x20
+                    && octets[1] == 0x01
+                    && octets[2] == 0x0d
+                    && octets[3] == 0xb8)
         }
     }
 }
@@ -61,6 +81,16 @@ fn is_blocked_host(host: &str) -> bool {
     }
 }
 
+fn validate_subscription_url_shape(url: &url::Url) -> Result<(), String> {
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(format!("unsupported URL scheme: {}", url.scheme()));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("subscription URLs with embedded credentials are not permitted".into());
+    }
+    Ok(())
+}
+
 async fn fetch_subscription_response(
     mut url: url::Url,
     user_agent: &str,
@@ -68,9 +98,7 @@ async fn fetch_subscription_response(
 ) -> Result<reqwest::Response, String> {
     const MAX_REDIRECTS: usize = 5;
     for redirect_count in 0..=MAX_REDIRECTS {
-        if !matches!(url.scheme(), "http" | "https") {
-            return Err(format!("unsupported URL scheme: {}", url.scheme()));
-        }
+        validate_subscription_url_shape(&url)?;
         let host = url
             .host_str()
             .filter(|host| !is_blocked_host(host))
@@ -113,9 +141,13 @@ async fn fetch_subscription_response(
             .get(reqwest::header::LOCATION)
             .and_then(|value| value.to_str().ok())
             .ok_or_else(|| "redirect response has no valid Location header".to_string())?;
-        url = url
+        let redirected = url
             .join(location)
             .map_err(|error| format!("invalid redirect URL: {error}"))?;
+        if url.scheme() == "https" && redirected.scheme() != "https" {
+            return Err("refusing to downgrade an HTTPS subscription redirect".into());
+        }
+        url = redirected;
     }
     Err("too many redirects".into())
 }
@@ -168,6 +200,9 @@ async fn fetch_subscription(
     let trimmed = url.trim();
     if trimmed.is_empty() {
         return Err("empty URL".to_string());
+    }
+    if trimmed.len() > MAX_SUB_BYTES {
+        return Err("subscription input too large".to_string());
     }
 
     // Pasted JSON: an xray/v2ray config, a single outbound, or an array. The
@@ -230,7 +265,6 @@ async fn fetch_subscription(
 
     // Cap the body: subscriptions are KB-scale; bail past the limit so a
     // malicious endpoint can't OOM us with an unbounded response.
-    const MAX_SUB_BYTES: usize = 8 * 1024 * 1024;
     if resp
         .content_length()
         .map(|l| l > MAX_SUB_BYTES as u64)
@@ -442,20 +476,45 @@ mod tests {
     #[test]
     fn subscription_fetch_rejects_non_public_address_ranges() {
         for address in [
+            "0.0.0.1",
             "127.0.0.1",
             "10.0.0.1",
             "172.16.0.1",
             "192.168.1.1",
             "169.254.1.1",
             "100.64.0.1",
+            "192.0.2.1",
+            "198.18.0.1",
+            "198.51.100.1",
+            "203.0.113.1",
+            "224.0.0.1",
             "255.255.255.255",
             "::1",
+            "::ffff:127.0.0.1",
             "fc00::1",
             "fe80::1",
+            "ff02::1",
+            "2001:db8::1",
         ] {
             assert!(is_blocked_host(address), "{address} must be blocked");
         }
         assert!(!is_blocked_host("1.1.1.1"));
         assert!(!is_blocked_host("example.com"));
+    }
+
+    #[test]
+    fn subscription_urls_reject_credentials_and_non_http_schemes() {
+        assert!(validate_subscription_url_shape(
+            &url::Url::parse("https://user:secret@example.com/sub").unwrap()
+        )
+        .is_err());
+        assert!(validate_subscription_url_shape(
+            &url::Url::parse("file:///C:/Windows/win.ini").unwrap()
+        )
+        .is_err());
+        assert!(validate_subscription_url_shape(
+            &url::Url::parse("https://example.com/sub").unwrap()
+        )
+        .is_ok());
     }
 }

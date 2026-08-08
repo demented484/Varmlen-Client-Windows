@@ -22,6 +22,10 @@ fn install_waits_for_ipc_readiness_and_does_not_grant_user_modify() {
     let postinstall = macro_body("NSIS_HOOK_POSTINSTALL");
     assert!(postinstall.contains("--health"));
     assert!(postinstall.contains("sc.exe config VarmlenService"));
+    assert!(postinstall.contains("sc.exe sdset VarmlenService"));
+    assert!(postinstall.contains(";;;SY"));
+    assert!(postinstall.contains(";;;BA"));
+    assert!(postinstall.contains(";;;IU"));
     assert!(postinstall.contains("$COMMONPROGRAMDATA\\Varmlen"));
     assert!(postinstall.contains("SetSecurityDescriptorSddlForm"));
     assert!(postinstall.contains("O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"));
@@ -37,11 +41,16 @@ fn uninstall_is_never_held_hostage_by_legacy_wfp_cleanup() {
     let cleanup_warning = uninstall
         .find("Legacy WFP cleanup warning")
         .expect("cleanup warning exists");
+    let service_query = uninstall
+        .find("sc.exe query VarmlenService")
+        .expect("service existence is checked");
     let service_delete = uninstall
         .find("sc.exe delete VarmlenService")
-        .expect("service is deleted");
-    assert!(cleanup_warning < service_delete);
-    assert!(!uninstall[cleanup_warning..service_delete].contains("Abort"));
+        .expect("registered service is deleted");
+    assert!(cleanup_warning < service_query);
+    assert!(service_query < service_delete);
+    assert!(!uninstall[cleanup_warning..service_query].contains("Abort"));
+    assert!(uninstall.contains("already absent; continuing uninstallation"));
 }
 
 #[test]
