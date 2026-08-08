@@ -416,16 +416,12 @@ class SubsStore {
         );
         return;
       }
-      // A present Subscription-Userinfo header is AUTHORITATIVE: an absent
-      // key means "no quota / never expires" and must CLEAR the stored value
-      // (e.g. a plan upgraded to unlimited previously kept showing the old
-      // expiry forever). Only when the header is missing entirely do we keep
-      // what we knew.
-      const info = result.meta.has_userinfo;
-      const totalBytes = info ? (result.meta.total_bytes ?? 0) : sub.totalBytes;
-      const usedBytes = info
-        ? (result.meta.upload_bytes ?? 0) + (result.meta.download_bytes ?? 0)
-        : sub.usedBytes;
+      // The latest response is authoritative, full stop — no falling back to
+      // cached quota/expiry from a previous fetch. If this response doesn't
+      // carry a value, there is no value: show nothing rather than stale data.
+      const totalBytes = result.meta.total_bytes ?? 0;
+      const usedBytes =
+        (result.meta.upload_bytes ?? 0) + (result.meta.download_bytes ?? 0);
       const freshServers = result.servers.map(toServerEntry);
       this.list = this.list.map((s) =>
         s.id === subId
@@ -438,9 +434,7 @@ class SubsStore {
                 result.meta.update_interval_hours ?? s.updateIntervalHours,
               usedBytes,
               totalBytes,
-              expiresAtUnix: info
-                ? (result.meta.expires_at_unix ?? null)
-                : s.expiresAtUnix,
+              expiresAtUnix: result.meta.expires_at_unix ?? null,
               supportUrl: result.meta.support_url,
               webPageUrl: result.meta.web_page_url,
               sourceJson: result.source_json,
