@@ -4499,6 +4499,7 @@ dependencies = [
  "url",
  "varmlen-protocol",
  "varmlen-service-core",
+ "windows 0.62.2",
  "windows-icons",
  "winreg",
 ]

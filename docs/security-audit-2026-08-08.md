@@ -67,8 +67,12 @@ needed.
 
 The runtime monitor checks only whether the Xray process is alive. It does not
 subscribe to default-route, adapter, DNS, power-resume, or network-profile
-changes. Xray's automatic outbound-interface choice can become stale when a
-machine moves between Wi-Fi, Ethernet, docking, Hyper-V/WSL, or sleep/resume.
+changes. After a real Windows DNS-timeout failure, startup was hardened to ask
+Windows' route table for the VPN endpoint's physical interface and pin Xray to
+that exact adapter instead of relying on Xray's name/address heuristic. That
+fixes initial selection around Hyper-V/WSL adapters, but the choice can still
+become stale when a machine moves between Wi-Fi, Ethernet, docking, or
+sleep/resume.
 
 Recommendation: add Windows network and power notifications, debounce them,
 re-resolve server endpoints, and transactionally reconnect. Test Wi-Fi changes,
@@ -98,10 +102,13 @@ always emit `allowInsecure: false`.
 ### Medium — split tunneling is route/process matching, not process-tree enforcement
 
 Xray's Windows `process` matcher supports executable paths and is useful for a
-preview. It does not provide the dedicated child-process inheritance and socket
-redirection used by mature split-tunnel drivers. Launchers, browser helper
-processes, services, already-running shared browser instances, and privileged
-processes can therefore behave differently from the selected executable.
+preview. Steam/Xbox game installs are now represented as trailing-slash folder
+selectors, so Xray recursively covers campaign/multiplayer executables under
+that game directory. It still does not provide the dedicated parent/child
+inheritance and socket redirection used by mature split-tunnel drivers.
+Launchers or helpers outside the selected folder, browser subprocesses,
+services, already-running shared browser instances, and privileged processes
+can therefore behave differently from the selected executable.
 Domain split routing is also best effort when destinations cannot be inferred
 because of encrypted DNS/ECH or process lookup limitations.
 

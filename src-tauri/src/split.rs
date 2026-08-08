@@ -24,7 +24,8 @@ pub struct SplitInput {
     /// Sites mode: "selective" | "general".
     #[serde(default)]
     pub sites_mode: String,
-    /// Process / binary names (desktop) or package names (Android) of enabled apps.
+    /// Canonical executable paths or trailing-slash game folders on Windows;
+    /// package names on Android.
     #[serde(default)]
     pub apps: Vec<String>,
     /// Enabled site patterns (e.g. "example.com" or "*.example.com").
@@ -42,7 +43,7 @@ impl SplitInput {
         self.sites_mode == "selective"
     }
 
-    /// Enabled, non-empty app/process names.
+    /// Enabled, non-empty app/process selectors.
     pub fn enabled_apps(&self) -> Vec<String> {
         self.apps
             .iter()

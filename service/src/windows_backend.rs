@@ -9,13 +9,14 @@ use varmlen_protocol::{ConnectRequest, ServiceError, ServiceErrorCode};
 use varmlen_service_core::{
     controller::ConnectionBackend,
     runtime::{
-        inspect_native_tun_config, inspect_validation_config, RuntimeLayout, TUN_IPV4_GATEWAY,
+        inspect_native_tun_config, inspect_validation_config, rewrite_native_outbound_interface,
+        RuntimeLayout, TUN_IPV4_GATEWAY,
     },
 };
 
 use crate::{
     state_record::DesiredStateRecord,
-    windows_adapter::{find_varmlen_adapter, AdapterInfo},
+    windows_adapter::{best_outbound_interface_name, find_varmlen_adapter, AdapterInfo},
     windows_process::{prepare_native_config, validate_config, ManagedXray, PreparedXrayConfig},
     windows_state::{ensure_state_directory, persist_desired_state, runtime_layout},
     windows_wfp::cleanup_persistent_policy,
@@ -28,6 +29,9 @@ pub struct WindowsBackend {
     previous_request: Option<ConnectRequest>,
     candidate_request: Option<ConnectRequest>,
     prepared_candidate: Option<PreparedXrayConfig>,
+    active_interface: Option<String>,
+    previous_interface: Option<String>,
+    candidate_interface: Option<String>,
     pending_operation_id: u64,
 }
 
@@ -47,6 +51,9 @@ impl WindowsBackend {
             previous_request: None,
             candidate_request: None,
             prepared_candidate: None,
+            active_interface: None,
+            previous_interface: None,
+            candidate_interface: None,
             pending_operation_id: 0,
         })
     }
@@ -105,12 +112,27 @@ impl WindowsBackend {
                 "TUN-bound TCP health check timed out",
             )
         })??;
-        timeout(Duration::from_secs(5), lookup_host(("mullvad.net", 443)))
-            .await
-            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "DNS health check timed out"))??
-            .next()
-            .ok_or_else(|| io::Error::other("DNS health check returned no addresses"))?;
-        Ok(())
+        let mut last_error = None;
+        for _ in 0..3 {
+            match timeout(Duration::from_secs(6), lookup_host(("mullvad.net", 443))).await {
+                Ok(Ok(mut addresses)) => {
+                    if addresses.next().is_some() {
+                        return Ok(());
+                    }
+                    last_error = Some("DNS returned no addresses".to_string());
+                }
+                Ok(Err(error)) => last_error = Some(error.to_string()),
+                Err(_) => last_error = Some("DNS query timed out".to_string()),
+            }
+            sleep(Duration::from_millis(350)).await;
+        }
+        Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!(
+                "DNS health check failed after adapter startup: {}",
+                last_error.unwrap_or_else(|| "unknown DNS error".into())
+            ),
+        ))
     }
 }
 
@@ -126,12 +148,13 @@ impl ConnectionBackend for WindowsBackend {
         inspect_validation_config(&request.validation_config)
             .map_err(|error| service_error(ServiceErrorCode::ValidationFailed, error))?;
         for app in &request.excluded_apps {
-            let path = PathBuf::from(&app.canonical_path);
-            if !path.is_absolute() || !path.is_file() {
+            let path_text = app.canonical_path.trim_end_matches(['\\', '/']);
+            let path = PathBuf::from(path_text);
+            if !path.is_absolute() || (!path.is_file() && !path.is_dir()) {
                 return Err(service_error(
                     ServiceErrorCode::ValidationFailed,
                     format!(
-                        "excluded application does not exist or is not absolute: {}",
+                        "split-tunnel application or folder does not exist or is not absolute: {}",
                         path.display()
                     ),
                 ));
@@ -140,12 +163,31 @@ impl ConnectionBackend for WindowsBackend {
         validate_config(&self.layout, &request.validation_config)
             .await
             .map_err(|error| service_error(ServiceErrorCode::ValidationFailed, error))?;
+
+        // Resolve the endpoint's actual Windows route while the candidate TUN
+        // is still down, then pin Xray to that adapter. This avoids the native
+        // TUN's name/address heuristic choosing Hyper-V, WSL, or another
+        // virtual interface and looping its own Reality/DoH traffic.
+        let interface = match self.active_interface.clone() {
+            // Candidate validation intentionally happens before the old tunnel
+            // is stopped. Its default route would make GetBestInterfaceEx point
+            // at Varmlen itself, so a reconnect reuses the physical adapter
+            // already proven by the active connection.
+            Some(interface) => interface,
+            None => best_outbound_interface_name(&request.server_endpoints)
+                .map_err(|error| service_error(ServiceErrorCode::ValidationFailed, error))?,
+        };
+        let effective_config = rewrite_native_outbound_interface(&request.xray_config, &interface)
+            .map_err(|error| service_error(ServiceErrorCode::ValidationFailed, error))?;
         self.prepared_candidate = Some(
-            prepare_native_config(&self.layout, &request.xray_config)
+            prepare_native_config(&self.layout, &effective_config)
                 .await
                 .map_err(|error| service_error(ServiceErrorCode::ValidationFailed, error))?,
         );
+        // Persist the portable `"auto"` intent. Every cold startup recalculates
+        // the physical adapter from the then-current Windows route.
         self.candidate_request = Some(request.clone());
+        self.candidate_interface = Some(interface);
         Ok(())
     }
 
@@ -174,12 +216,13 @@ impl ConnectionBackend for WindowsBackend {
 
     async fn stop_active(&mut self) -> Result<(), ServiceError> {
         self.previous_request = self.active_request.take();
+        self.previous_interface = self.active_interface.take();
         self.stop_process()
             .await
             .map_err(|error| service_error(ServiceErrorCode::XrayStartFailed, error))
     }
 
-    async fn start_candidate(&mut self, request: &ConnectRequest) -> Result<(), ServiceError> {
+    async fn start_candidate(&mut self, _request: &ConnectRequest) -> Result<(), ServiceError> {
         let prepared = self.prepared_candidate.as_ref().ok_or_else(|| {
             service_error(
                 ServiceErrorCode::ValidationFailed,
@@ -190,7 +233,6 @@ impl ConnectionBackend for WindowsBackend {
             ManagedXray::start_prepared(&self.layout, prepared)
                 .map_err(|error| service_error(ServiceErrorCode::XrayStartFailed, error))?,
         );
-        self.candidate_request = Some(request.clone());
         Ok(())
     }
 
@@ -224,7 +266,9 @@ impl ConnectionBackend for WindowsBackend {
         )
         .map_err(|error| service_error(ServiceErrorCode::Internal, error))?;
         self.active_request = Some(request.clone());
+        self.active_interface = self.candidate_interface.take();
         self.previous_request = None;
+        self.previous_interface = None;
         self.candidate_request = None;
         self.prepared_candidate = None;
         Ok(())
@@ -244,8 +288,15 @@ impl ConnectionBackend for WindowsBackend {
                 "there is no previous connection to restore",
             )
         })?;
+        let interface = match self.previous_interface.take() {
+            Some(interface) => interface,
+            None => best_outbound_interface_name(&previous.server_endpoints)
+                .map_err(|error| service_error(ServiceErrorCode::RestoreFailed, error))?,
+        };
+        let effective_config = rewrite_native_outbound_interface(&previous.xray_config, &interface)
+            .map_err(|error| service_error(ServiceErrorCode::RestoreFailed, error))?;
         self.active = Some(
-            ManagedXray::start(&self.layout, &previous.xray_config)
+            ManagedXray::start(&self.layout, &effective_config)
                 .map_err(|error| service_error(ServiceErrorCode::RestoreFailed, error))?,
         );
         self.wait_for_candidate()
@@ -260,6 +311,8 @@ impl ConnectionBackend for WindowsBackend {
         )
         .map_err(|error| service_error(ServiceErrorCode::RestoreFailed, error))?;
         self.active_request = Some(previous);
+        self.active_interface = Some(interface);
+        self.candidate_interface = None;
         self.candidate_request = None;
         self.prepared_candidate = None;
         Ok(())
@@ -278,6 +331,9 @@ impl ConnectionBackend for WindowsBackend {
         self.previous_request = None;
         self.candidate_request = None;
         self.prepared_candidate = None;
+        self.active_interface = None;
+        self.previous_interface = None;
+        self.candidate_interface = None;
         let _ = cleanup_persistent_policy();
         persist_desired_state(
             &self.layout,

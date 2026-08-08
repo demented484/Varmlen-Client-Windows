@@ -905,9 +905,9 @@ fn build_inbounds() -> Vec<Value> {
 }
 
 /// Routing rules. Per-app (`process`) and per-site (`domain`) split are BOTH
-/// enforced here — xray's native tun preserves each app's local socket, so the
-/// `process` matcher resolves the owning process (Linux), exactly like sing-box
-/// `process_name`. Every rule needs `"type":"field"` for cross-version safety.
+/// enforced here — Xray's native Windows TUN preserves each app's local socket,
+/// so the `process` matcher can resolve its owning executable. Every rule needs
+/// `"type":"field"` for cross-version safety.
 ///
 /// Mode semantics (apps and sites are INDEPENDENT):
 ///   - selective (whitelist): listed entries -> proxy.
@@ -945,7 +945,8 @@ fn build_route_rules(
     }
 
     // 3. Per-app split. Xray's Windows process finder handles local TCP and
-    // UDP sockets and accepts normalized forward-slash executable paths.
+    // UDP sockets. A normalized path ending in `/` recursively matches every
+    // game executable under that selected install folder.
     for app in split.enabled_apps() {
         let mut rule = json!({ "type": "field", "process": [app] });
         if apps_use_proxy {
@@ -1666,6 +1667,21 @@ mod tests {
         let domains = site_rule["domain"].as_array().unwrap();
         assert!(domains.contains(&json!("domain:ru")));
         assert!(domains.contains(&json!("full:example.com")));
+    }
+
+    #[test]
+    fn game_folder_selector_keeps_recursive_trailing_slash() {
+        let server = parse_proxy_uri("vless://u@1.2.3.4:443?security=reality&pbk=K#X").unwrap();
+        let split = SplitInput {
+            apps_mode: "selective".into(),
+            apps: vec!["C:/XboxGames/Call of Duty/Content/".into()],
+            ..Default::default()
+        };
+        let config = build_xray_config(&server, &split, true, "warning");
+        assert_eq!(
+            rule_for(&config, "process").unwrap()["process"][0],
+            "C:/XboxGames/Call of Duty/Content/"
+        );
     }
 
     #[test]

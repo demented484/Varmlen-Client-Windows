@@ -2,9 +2,9 @@ use std::path::PathBuf;
 
 use serde_json::json;
 use varmlen_service_core::runtime::{
-    inspect_native_tun_config, inspect_validation_config, rewrite_validation_ports, AssetArch,
-    PolicyMode, PolicySpec, RuntimeLayout, DNS_FILTER_WEIGHT, LOOPBACK_FILTER_WEIGHT,
-    XRAY_FILTER_WEIGHT,
+    inspect_native_tun_config, inspect_validation_config, rewrite_native_outbound_interface,
+    rewrite_validation_ports, AssetArch, PolicyMode, PolicySpec, RuntimeLayout, DNS_FILTER_WEIGHT,
+    LOOPBACK_FILTER_WEIGHT, XRAY_FILTER_WEIGHT,
 };
 
 fn native_config() -> String {
@@ -52,6 +52,22 @@ fn native_tun_requires_dual_stack_routes_and_explicit_dns() {
     assert!(inspect_native_tun_config(&missing_dns.to_string())
         .unwrap_err()
         .contains("DNS"));
+}
+
+#[test]
+fn service_pins_native_tun_to_the_windows_selected_physical_interface() {
+    let rewritten = rewrite_native_outbound_interface(&native_config(), "Wi-Fi")
+        .expect("service-selected physical interface");
+    let value: serde_json::Value = serde_json::from_str(&rewritten).unwrap();
+    assert_eq!(
+        value["inbounds"][0]["settings"]["autoOutboundsInterface"],
+        "Wi-Fi"
+    );
+    assert!(rewrite_native_outbound_interface(&native_config(), "").is_err());
+    assert!(rewrite_native_outbound_interface(&native_config(), "bad\ninterface").is_err());
+
+    let untrusted = native_config().replace(r#""auto""#, r#""attacker-selected""#);
+    assert!(rewrite_native_outbound_interface(&untrusted, "Wi-Fi").is_err());
 }
 
 #[test]

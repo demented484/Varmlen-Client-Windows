@@ -140,6 +140,45 @@ pub fn inspect_native_tun_config(config: &str) -> Result<NativeTunInspection, St
     })
 }
 
+/// Pin a previously validated native TUN config to the physical interface that
+/// Windows selected for the VPN endpoint before the TUN default route exists.
+/// This avoids Xray's heuristic `"auto"` choice selecting an unrelated virtual
+/// adapter on machines with Hyper-V, WSL, or multiple game/VPN adapters.
+pub fn rewrite_native_outbound_interface(
+    config: &str,
+    interface_name: &str,
+) -> Result<String, String> {
+    inspect_native_tun_config(config)?;
+    let interface_name = interface_name.trim();
+    if interface_name.is_empty()
+        || interface_name.len() > 256
+        || interface_name.chars().any(char::is_control)
+    {
+        return Err("physical outbound interface name is invalid".into());
+    }
+
+    let mut root = parse_object(config, "native Xray config")?;
+    let tun = root
+        .get_mut("inbounds")
+        .and_then(Value::as_array_mut)
+        .and_then(|inbounds| {
+            inbounds
+                .iter_mut()
+                .find(|inbound| inbound.get("protocol").and_then(Value::as_str) == Some("tun"))
+        })
+        .ok_or_else(|| "native Xray config has no TUN inbound".to_string())?;
+    let settings = tun
+        .get_mut("settings")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "TUN inbound has no settings object".to_string())?;
+    settings.insert(
+        "autoOutboundsInterface".into(),
+        Value::String(interface_name.to_string()),
+    );
+    serde_json::to_string_pretty(&Value::Object(root))
+        .map_err(|error| format!("could not serialize native Xray config: {error}"))
+}
+
 pub fn inspect_validation_config(config: &str) -> Result<ValidationInspection, String> {
     let root = parse_object(config, "validation Xray config")?;
     reject_unknown_top_level_fields(

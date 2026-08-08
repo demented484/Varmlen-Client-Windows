@@ -3,6 +3,7 @@ const VPN_BRIDGE: &str = include_str!("../../src-tauri/src/vpn.rs");
 const SETTINGS_PAGE: &str = include_str!("../../src/routes/settings/+page.svelte");
 const WFP: &str = include_str!("../src/windows_wfp.rs");
 const PIPE: &str = include_str!("../src/pipe.rs");
+const ADAPTER: &str = include_str!("../src/windows_adapter.rs");
 
 #[test]
 fn preview_connection_does_not_depend_on_user_mode_wfp_filters() {
@@ -17,6 +18,15 @@ fn preview_connection_does_not_depend_on_user_mode_wfp_filters() {
     assert!(PIPE.contains("disconnect(operation_id, false)"));
     assert!(PIPE.contains("force_disconnected(operation_id)"));
     assert!(!PIPE.contains("force_blocked(operation_id)"));
+}
+
+#[test]
+fn native_tun_is_pinned_to_windows_route_and_game_folders_are_valid_selectors() {
+    assert!(BACKEND.contains("best_outbound_interface_name"));
+    assert!(BACKEND.contains("rewrite_native_outbound_interface"));
+    assert!(ADAPTER.contains("GetBestInterfaceEx"));
+    assert!(VPN_BRIDGE.contains("canonical.is_dir()"));
+    assert!(VPN_BRIDGE.contains("canonical_path.push('\\\\')"));
 }
 
 #[test]
