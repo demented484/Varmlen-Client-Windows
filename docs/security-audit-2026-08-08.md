@@ -231,11 +231,29 @@ core, and can use native TUN plus domain/process routing. It is a general proxy
 manager rather than a fail-closed VPN security product, so `strict_route` must
 not be read as a complete kill switch.
 
+### Protocol-scope clarification
+
+Bundling Xray does not make a GUI automatically understand every share-link or
+configuration shape: the client still has to parse provider input and generate
+the corresponding Xray JSON. Varmlen's current allowlist covers the practical
+Xray proxy-outbound catalogue used by this product: HTTP, SOCKS, Shadowsocks,
+VMess, VLESS, Trojan, Hysteria and WireGuard. Direct URI import currently has
+first-class parsers for VLESS, VMess, Trojan and Shadowsocks; the remaining
+allowlisted protocols are accepted through supported Xray JSON shapes or the
+location editor.
+
+Therefore “v2rayN supports more protocols” does **not** mean that Varmlen is
+missing the ordinary Xray outbound protocols. v2rayN's larger total catalogue
+comes mainly from its additional sing-box, Mihomo and standalone cores, plus
+more share-link/subscription parsers. Those non-Xray protocols cannot be gained
+merely by bundling Xray.
+
 ### Where v2rayN is ahead
 
-- Much broader and more mature profile ecosystem: Xray, sing-box, Mihomo and
-  other cores; more transports, subscription formats, custom configurations,
-  routing editors, system-proxy modes, speed tests and backup features.
+- Much broader and more mature multi-core profile ecosystem: Xray, sing-box,
+  Mihomo and other cores; more non-Xray protocols, share-link/subscription
+  formats, custom configurations, routing editors, system-proxy modes, speed
+  tests and backup features.
 - TUN exposes `auto_route`, `strict_route`, route exclusions, interface binding,
   IPv6 and ICMP policy. It can use sing-box as a TUN front-end for another core.
 - Its native config builder is considerably broader than Varmlen's current
