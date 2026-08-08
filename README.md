@@ -25,8 +25,9 @@ tunneling. Built on Tauri 2 and SvelteKit.
 ## Features
 
 - Xray's native TUN inbound over Wintun; there is no tun2socks or proxy mode.
-- VLESS, VMess, Trojan, Shadowsocks, Hysteria, WireGuard, HTTP and SOCKS
-  outbounds, including provider-supplied multi-outbound JSON profiles.
+- VLESS, VMess, Trojan, Shadowsocks, Hysteria2, WireGuard, HTTP and SOCKS5
+  outbounds, including share-link lists, standard WireGuard configurations and
+  provider-supplied multi-outbound JSON profiles.
 - Per-app and per-domain split tunneling in independent general/selective modes.
 - Transactional reconnect: the candidate is validated before the active tunnel
   is stopped, and the previous connection is restored if the candidate fails.

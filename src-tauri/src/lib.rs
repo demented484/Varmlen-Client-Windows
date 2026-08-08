@@ -11,7 +11,8 @@ mod xray;
 use std::time::Duration;
 
 use subscription::{
-    decode_maybe_b64, is_supported_uri, parse_body_meta, parse_headers, parse_json_subscription,
+    decode_maybe_b64, is_supported_uri, is_unambiguous_direct_proxy_uri,
+    looks_like_wireguard_config, parse_body_meta, parse_headers, parse_json_subscription,
     parse_proxy_uri, parse_subscription, ImportResult, SubscriptionMeta, VlessServer,
 };
 
@@ -205,6 +206,21 @@ async fn fetch_subscription(
         return Err("subscription input too large".to_string());
     }
 
+    // A standard WireGuard file also begins with `[`, so recognize it before
+    // the generic JSON-array branch.
+    if looks_like_wireguard_config(trimmed) {
+        let servers = parse_subscription(trimmed);
+        if servers.is_empty() {
+            return Err("no connectable WireGuard peers found".to_string());
+        }
+        return Ok(ImportResult {
+            meta: SubscriptionMeta::default(),
+            servers,
+            description: None,
+            source_json: None,
+        });
+    }
+
     // Pasted JSON: an xray/v2ray config, a single outbound, or an array. The
     // config's `remarks` names the LOCATION (it's applied to the server label
     // inside parse_json_subscription), not the subscription — a pasted config
@@ -222,14 +238,15 @@ async fn fetch_subscription(
         });
     }
 
-    if is_supported_uri(trimmed) {
-        // One pasted share-link, or several newline/whitespace-separated.
-        if trimmed
-            .lines()
-            .filter(|l| is_supported_uri(l.trim()))
-            .count()
-            > 1
-        {
+    let share_link_count = trimmed
+        .lines()
+        .filter(|line| is_supported_uri(line.trim()))
+        .count();
+    if is_unambiguous_direct_proxy_uri(trimmed) || share_link_count > 1 {
+        // One unambiguous pasted share-link, or a list. A lone HTTP(S) URL
+        // without credentials/fragment remains a subscription URL because its
+        // meaning cannot be inferred safely.
+        if share_link_count > 1 {
             let servers = parse_subscription(trimmed);
             if servers.is_empty() {
                 return Err("no servers found".to_string());

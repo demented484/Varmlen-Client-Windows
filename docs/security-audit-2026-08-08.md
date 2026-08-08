@@ -237,10 +237,15 @@ Bundling Xray does not make a GUI automatically understand every share-link or
 configuration shape: the client still has to parse provider input and generate
 the corresponding Xray JSON. Varmlen's current allowlist covers the practical
 Xray proxy-outbound catalogue used by this product: HTTP, SOCKS, Shadowsocks,
-VMess, VLESS, Trojan, Hysteria and WireGuard. Direct URI import currently has
-first-class parsers for VLESS, VMess, Trojan and Shadowsocks; the remaining
-allowlisted protocols are accepted through supported Xray JSON shapes or the
-location editor.
+VMess, VLESS, Trojan, Hysteria and WireGuard. The follow-up implementation now
+parses direct links for all eight, including both `hy2://` / `hysteria2://` and
+v2rayN-compatible `wireguard://`, and imports standard WireGuard
+`[Interface]` / `[Peer]` configurations. A lone unauthenticated HTTP(S) URL is
+kept as a subscription URL because it is indistinguishable from an anonymous
+HTTP-proxy link; such proxies remain importable from a link list, JSON, or the
+location editor. Hysteria extensions unavailable in the bundled Xray transport
+are rejected rather than silently discarded, as are requests to disable TLS
+validation.
 
 Therefore “v2rayN supports more protocols” does **not** mean that Varmlen is
 missing the ordinary Xray outbound protocols. v2rayN's larger total catalogue

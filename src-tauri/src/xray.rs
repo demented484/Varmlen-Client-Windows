@@ -433,11 +433,10 @@ pub fn validate_server(server: &VlessServer) -> Result<(), String> {
     }
 
     let protocol = server.protocol.to_ascii_lowercase();
-    if server
-        .raw_params
-        .get("allowInsecure")
-        .is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true"))
-    {
+    if server.raw_params.iter().any(|(key, value)| {
+        key.eq_ignore_ascii_case("allowInsecure")
+            && matches!(value.to_ascii_lowercase().as_str(), "1" | "true")
+    }) {
         return Err("TLS certificate validation cannot be disabled".into());
     }
     if !is_proxy_protocol(&protocol) {
@@ -666,6 +665,15 @@ fn build_stream_settings(s: &VlessServer) -> Value {
     Value::Object(stream)
 }
 
+fn endpoint(host: &str, port: u16) -> String {
+    let host = host.trim_matches(['[', ']']);
+    if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
 fn build_wireguard_outbound(s: &VlessServer) -> Value {
     let addresses = s
         .raw_params
@@ -674,7 +682,7 @@ fn build_wireguard_outbound(s: &VlessServer) -> Value {
         .filter(|items| !items.is_empty())
         .unwrap_or_else(|| vec!["10.0.0.1/32".into()]);
     let mut peer = serde_json::Map::new();
-    peer.insert("endpoint".into(), json!(format!("{}:{}", s.host, s.port)));
+    peer.insert("endpoint".into(), json!(endpoint(&s.host, s.port)));
     peer.insert(
         "publicKey".into(),
         json!(s.public_key.clone().unwrap_or_default()),
@@ -685,6 +693,21 @@ fn build_wireguard_outbound(s: &VlessServer) -> Value {
         .filter(|value| !value.is_empty())
     {
         peer.insert("preSharedKey".into(), json!(value));
+    }
+    if let Some(value) = s
+        .raw_params
+        .get("allowedIPs")
+        .map(|value| split_list(value))
+        .filter(|items| !items.is_empty())
+    {
+        peer.insert("allowedIPs".into(), json!(value));
+    }
+    if let Some(value) = s
+        .raw_params
+        .get("keepAlive")
+        .and_then(|value| value.parse::<u32>().ok())
+    {
+        peer.insert("keepAlive".into(), json!(value));
     }
     let mut settings = serde_json::Map::new();
     settings.insert("secretKey".into(), json!(s.uuid));
@@ -1363,6 +1386,10 @@ mod tests {
         assert!(validate_server(&share)
             .unwrap_err()
             .contains("certificate validation cannot be disabled"));
+        let lowercase =
+            parse_proxy_uri("vless://uuid@vpn.example:443?security=tls&allowinsecure=true")
+                .unwrap();
+        assert!(validate_server(&lowercase).is_err());
 
         let profile = json!({
             "outbounds": [{

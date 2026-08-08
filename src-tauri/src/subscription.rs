@@ -1,13 +1,9 @@
 //! Proxy URI and subscription parser.
 //!
-//! Supports the schemes commonly found in subscriptions:
-//! - `vless://<uuid>@<host>:<port>?<params>#<label>`
-//! - `trojan://<password>@<host>:<port>?<params>#<label>`
-//! - `ss://<base64(method:password)>@<host>:<port>#<label>` (and legacy forms)
-//! - `vmess://<base64-json>`
-//!
-//! Subscription body: either plaintext (one URI per line) or base64-encoded
-//! plaintext. Whitespace-only lines and comment lines (`#…`) are ignored.
+//! Supports Xray share links for VLESS, VMess, Trojan, Shadowsocks, Hysteria2,
+//! WireGuard, HTTP and SOCKS, plus standard WireGuard `[Interface]` / `[Peer]`
+//! configurations. Subscription bodies may be plaintext or base64-encoded;
+//! whitespace-only lines and comment lines (`#…`) are ignored.
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -57,13 +53,13 @@ where
 }
 
 /// A single VPN endpoint parsed from a proxy URI. The struct keeps its
-/// historical name; `protocol` distinguishes vless / trojan / shadowsocks /
-/// vmess, and credential fields are filled per-protocol.
+/// historical name; `protocol` distinguishes every supported Xray proxy
+/// outbound, and credential fields are filled per protocol.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VlessServer {
     pub id: String,
-    /// Protocol: "vless" | "trojan" | "shadowsocks" | "vmess". Tolerant of
-    /// missing/null/empty (legacy data) → defaults to "vless".
+    /// One of the supported Xray proxy outbound protocols. Missing/null/empty
+    /// legacy data defaults to `vless`.
     #[serde(default = "default_protocol", deserialize_with = "de_protocol")]
     pub protocol: String,
     /// VLESS/VMess UUID, or Trojan password. Empty for Shadowsocks.
@@ -250,26 +246,63 @@ pub fn parse_body_meta(body: &str) -> (std::collections::HashMap<String, String>
     (headers, description)
 }
 
-/// Schemes we know how to parse.
+/// Schemes we know how to parse inside a subscription or pasted share-link.
 pub fn is_supported_uri(line: &str) -> bool {
     let l = line.trim();
-    l.starts_with("vless://")
-        || l.starts_with("trojan://")
-        || l.starts_with("ss://")
-        || l.starts_with("vmess://")
+    [
+        "vless://",
+        "trojan://",
+        "ss://",
+        "vmess://",
+        "hysteria2://",
+        "hy2://",
+        "wireguard://",
+        "socks://",
+        "socks5://",
+        "http://",
+        "https://",
+    ]
+    .iter()
+    .any(|scheme| l.starts_with(scheme))
+}
+
+/// HTTP(S) is ambiguous in the main import field: it usually names the
+/// subscription endpoint, but authenticated/root URLs are also conventional
+/// HTTP-proxy links. Treat only a URL with credentials or a fragment label as
+/// an unambiguous directly pasted proxy; HTTP links inside a fetched/multiline
+/// subscription are already in proxy-list context and do not need this test.
+pub fn is_unambiguous_direct_proxy_uri(line: &str) -> bool {
+    let trimmed = line.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if !lower.starts_with("http://") && !lower.starts_with("https://") {
+        return is_supported_uri(trimmed);
+    }
+    Url::parse(trimmed).is_ok_and(|url| {
+        url.port().is_some()
+            && (!url.username().is_empty() || url.password().is_some() || url.fragment().is_some())
+    })
 }
 
 /// Parse any supported proxy URI, dispatching on its scheme.
 pub fn parse_proxy_uri(uri: &str) -> Result<VlessServer, ParseError> {
     let uri = uri.trim();
-    let server = if uri.starts_with("vless://") {
+    let lower = uri.to_ascii_lowercase();
+    let server = if lower.starts_with("vless://") {
         parse_vless(uri)?
-    } else if uri.starts_with("trojan://") {
+    } else if lower.starts_with("trojan://") {
         parse_trojan(uri)?
-    } else if uri.starts_with("ss://") {
+    } else if lower.starts_with("ss://") {
         parse_shadowsocks(uri)?
-    } else if uri.starts_with("vmess://") {
+    } else if lower.starts_with("vmess://") {
         parse_vmess(uri)?
+    } else if lower.starts_with("hysteria2://") || lower.starts_with("hy2://") {
+        parse_hysteria2(uri)?
+    } else if lower.starts_with("wireguard://") {
+        parse_wireguard_uri(uri)?
+    } else if lower.starts_with("socks://") || lower.starts_with("socks5://") {
+        parse_socks_uri(uri)?
+    } else if lower.starts_with("http://") || lower.starts_with("https://") {
+        parse_simple_proxy_uri(uri, "http")?
     } else {
         let scheme = uri.split("://").next().unwrap_or(uri);
         return Err(ParseError::UnsupportedScheme(scheme.to_string()));
@@ -285,6 +318,67 @@ fn label_from(fragment: Option<&str>, host: &str, port: u16) -> String {
     match fragment {
         Some(f) if !f.is_empty() => percent_decode(f),
         _ => format!("{host}:{port}"),
+    }
+}
+
+fn url_host(url: &Url) -> Option<String> {
+    match url.host()? {
+        url::Host::Domain(host) => Some(host.to_string()),
+        url::Host::Ipv4(host) => Some(host.to_string()),
+        url::Host::Ipv6(host) => Some(host.to_string()),
+    }
+}
+
+fn query_params(url: &Url) -> HashMap<String, String> {
+    url.query_pairs()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect()
+}
+
+fn query_value<'a>(params: &'a HashMap<String, String>, names: &[&str]) -> Option<&'a str> {
+    names.iter().find_map(|name| {
+        params
+            .iter()
+            .find_map(|(key, value)| key.eq_ignore_ascii_case(name).then_some(value.as_str()))
+    })
+}
+
+fn query_has(
+    params: &HashMap<String, String>,
+    names: &[&str],
+    predicate: impl Fn(&str) -> bool,
+) -> bool {
+    params.iter().any(|(key, value)| {
+        names.iter().any(|name| key.eq_ignore_ascii_case(name)) && predicate(value)
+    })
+}
+
+fn restored_base64(value: &str) -> String {
+    // application/x-www-form-urlencoded query decoding maps '+' to a space;
+    // unescaped WireGuard keys in real-world links still use raw base64 '+'.
+    value.replace(' ', "+")
+}
+
+fn userinfo(url: &Url, allow_base64_pair: bool) -> (String, Option<String>) {
+    let username = percent_decode(url.username());
+    let password = url.password().map(percent_decode);
+    if allow_base64_pair && password.is_none() && !username.is_empty() {
+        if let Some(decoded) = b64_decode_str(&username) {
+            if let Some((user, pass)) = decoded.split_once(':') {
+                return (user.to_string(), Some(pass.to_string()));
+            }
+        }
+    }
+    (username, password)
+}
+
+fn require_root_path(url: &Url) -> Result<(), ParseError> {
+    if matches!(url.path(), "" | "/") {
+        Ok(())
+    } else {
+        Err(ParseError::InvalidUri(
+            "proxy share-link must not contain a request path".into(),
+        ))
     }
 }
 
@@ -447,7 +541,7 @@ fn json_port(v: Option<&serde_json::Value>) -> Option<u16> {
 
 fn endpoint_host_port(endpoint: &str) -> Option<(String, u16)> {
     let parsed = Url::parse(&format!("tcp://{endpoint}")).ok()?;
-    Some((parsed.host_str()?.to_string(), parsed.port()?))
+    Some((url_host(&parsed)?, parsed.port()?))
 }
 
 fn direct_or_first<'a>(
@@ -702,6 +796,307 @@ fn apply_stream(s: &mut VlessServer, stream: Option<&serde_json::Value>) {
     }
 }
 
+fn parse_socks_uri(uri: &str) -> Result<VlessServer, ParseError> {
+    if let Ok(server) = parse_simple_proxy_uri(uri, "socks") {
+        return Ok(server);
+    }
+
+    // Legacy v2rayN form: socks://base64(username:password@host:port)#label.
+    let rest = uri.split_once("://").map(|(_, rest)| rest).unwrap_or("");
+    let (payload, fragment) = rest
+        .split_once('#')
+        .map_or((rest, None), |(payload, fragment)| {
+            (payload, Some(fragment))
+        });
+    let decoded = b64_decode_str(payload)
+        .ok_or_else(|| ParseError::InvalidUri("SOCKS base64 payload".into()))?;
+    let (credentials, endpoint) = decoded.rsplit_once('@').ok_or(ParseError::MissingHost)?;
+    let (username, password) = credentials
+        .split_once(':')
+        .ok_or(ParseError::MissingCredentials)?;
+    let (host, port) = endpoint_host_port(endpoint).ok_or(ParseError::MissingPort)?;
+    let mut server = VlessServer::base(
+        "socks",
+        host.clone(),
+        port,
+        label_from(fragment, &host, port),
+    );
+    server.uuid = username.to_string();
+    server.password = Some(password.to_string());
+    Ok(server)
+}
+
+/// Parse an HTTP(S) or SOCKS5 proxy URL. An explicit port and root path are
+/// required so ordinary web URLs in subscription descriptions are not mistaken
+/// for anonymous proxies.
+fn parse_simple_proxy_uri(uri: &str, protocol: &str) -> Result<VlessServer, ParseError> {
+    let url = Url::parse(uri.trim()).map_err(|error| ParseError::InvalidUri(error.to_string()))?;
+    require_root_path(&url)?;
+    let host = url_host(&url).ok_or(ParseError::MissingHost)?;
+    let port = url.port().ok_or(ParseError::MissingPort)?;
+    let (username, password) = userinfo(&url, protocol == "socks");
+    let params = query_params(&url);
+
+    let mut server = VlessServer::base(
+        protocol,
+        host.clone(),
+        port,
+        label_from(url.fragment(), &host, port),
+    );
+    server.uuid = username;
+    server.password = password;
+    server.security = if url.scheme().eq_ignore_ascii_case("https") {
+        "tls".into()
+    } else {
+        "none".into()
+    };
+    server.sni = query_value(&params, &["sni", "serverName"]).map(str::to_string);
+    server.fingerprint = query_value(&params, &["fp", "fingerprint"]).map(str::to_string);
+    server.raw_params = params;
+    Ok(server)
+}
+
+/// Parse the widely used Hysteria2 URI scheme. Xray's Hysteria2 transport does
+/// not implement every extension used by standalone Hysteria clients, so links
+/// requiring certificate bypass, pin-only trust, obfuscation or port hopping
+/// are rejected instead of being imported with silently changed semantics.
+pub fn parse_hysteria2(uri: &str) -> Result<VlessServer, ParseError> {
+    let url = Url::parse(uri.trim()).map_err(|error| ParseError::InvalidUri(error.to_string()))?;
+    if !matches!(url.scheme(), "hysteria2" | "hy2") {
+        return Err(ParseError::UnsupportedScheme(url.scheme().to_string()));
+    }
+    require_root_path(&url)?;
+    let host = url_host(&url).ok_or(ParseError::MissingHost)?;
+    // The official Hysteria2 URI scheme defaults an omitted port to 443.
+    let port = url.port().unwrap_or(443);
+    let params = query_params(&url);
+    let (username, password) = userinfo(&url, false);
+    let auth = if username.is_empty() {
+        query_value(&params, &["auth"])
+            .map(str::to_string)
+            .unwrap_or_default()
+    } else if let Some(password) = password {
+        format!("{username}:{password}")
+    } else {
+        username
+    };
+    if auth.is_empty() {
+        return Err(ParseError::MissingCredentials);
+    }
+
+    if query_has(&params, &["insecure", "allowInsecure"], |value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes"
+        )
+    }) {
+        return Err(ParseError::InvalidUri(
+            "Hysteria2 link disables TLS certificate validation".into(),
+        ));
+    }
+    for (names, feature) in [
+        (&["obfs", "obfs-password"][..], "obfuscation"),
+        (&["mport", "ports"][..], "port hopping"),
+        (&["pinSHA256"][..], "certificate pin-only trust"),
+        (&["ech"][..], "ECH configuration"),
+    ] {
+        if query_has(&params, names, |value| {
+            !value.is_empty() && !value.eq_ignore_ascii_case("none")
+        }) {
+            return Err(ParseError::InvalidUri(format!(
+                "Hysteria2 {feature} is not supported by the bundled Xray transport"
+            )));
+        }
+    }
+
+    let mut server = VlessServer::base(
+        "hysteria",
+        host.clone(),
+        port,
+        label_from(url.fragment(), &host, port),
+    );
+    server.uuid = auth.clone();
+    server.password = Some(auth);
+    server.transport = "hysteria".into();
+    server.security = "tls".into();
+    server.sni = query_value(&params, &["sni", "peer"]).map(str::to_string);
+    server.fingerprint = query_value(&params, &["fp", "fingerprint"]).map(str::to_string);
+    server.raw_params = params;
+    Ok(server)
+}
+
+/// Parse v2rayN-compatible WireGuard URIs and the common query-key proposal:
+/// `wireguard://<private-key>@host:port?publickey=...&address=...` or
+/// `wireguard://host:port?private_key=...&peer_public_key=...`.
+pub fn parse_wireguard_uri(uri: &str) -> Result<VlessServer, ParseError> {
+    let url = Url::parse(uri.trim()).map_err(|error| ParseError::InvalidUri(error.to_string()))?;
+    if url.scheme() != "wireguard" {
+        return Err(ParseError::UnsupportedScheme(url.scheme().to_string()));
+    }
+    require_root_path(&url)?;
+    let host = url_host(&url).ok_or(ParseError::MissingHost)?;
+    let port = url.port().ok_or(ParseError::MissingPort)?;
+    let params = query_params(&url);
+    let private_key = if url.username().is_empty() {
+        query_value(&params, &["private_key", "privatekey", "secretKey"])
+            .map(restored_base64)
+            .unwrap_or_default()
+    } else {
+        restored_base64(&percent_decode(url.username()))
+    };
+    if private_key.is_empty() {
+        return Err(ParseError::MissingCredentials);
+    }
+    let public_key = query_value(&params, &["publickey", "publicKey", "peer_public_key"])
+        .map(restored_base64)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ParseError::InvalidUri("WireGuard public key is required".into()))?;
+
+    let mut server = VlessServer::base(
+        "wireguard",
+        host.clone(),
+        port,
+        label_from(url.fragment(), &host, port),
+    );
+    server.uuid = private_key;
+    server.public_key = Some(public_key);
+    server.transport = "wireguard".into();
+    if let Some(value) = query_value(&params, &["presharedkey", "preSharedKey", "pre_shared_key"]) {
+        server
+            .raw_params
+            .insert("preSharedKey".into(), restored_base64(value));
+    }
+    if let Some(value) = query_value(&params, &["address", "localAddress"]) {
+        server
+            .raw_params
+            .insert("localAddress".into(), value.to_string());
+    }
+    for (input, output) in [
+        ("reserved", "reserved"),
+        ("mtu", "mtu"),
+        ("domainStrategy", "domainStrategy"),
+        ("allowedIPs", "allowedIPs"),
+        ("allowed_ips", "allowedIPs"),
+        ("keepAlive", "keepAlive"),
+        ("persistent_keepalive", "keepAlive"),
+    ] {
+        if let Some(value) = query_value(&params, &[input]) {
+            server.raw_params.insert(output.into(), value.to_string());
+        }
+    }
+    Ok(server)
+}
+
+/// Parse a standard WireGuard configuration. Every connectable `[Peer]`
+/// becomes a location that shares the interface private key/address.
+pub fn parse_wireguard_config(body: &str) -> Vec<VlessServer> {
+    let mut interface = HashMap::<String, String>::new();
+    let mut peers = Vec::<HashMap<String, String>>::new();
+    let mut section: Option<usize> = None; // 0 = interface, n+1 = peer n
+
+    for raw_line in body.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if line.eq_ignore_ascii_case("[Interface]") {
+            section = Some(0);
+            continue;
+        }
+        if line.eq_ignore_ascii_case("[Peer]") {
+            peers.push(HashMap::new());
+            section = Some(peers.len());
+            continue;
+        }
+        if line.starts_with('[') {
+            section = None;
+            continue;
+        }
+        let Some((key, raw_value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = raw_value
+            .split(['#', ';'])
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if value.is_empty() {
+            continue;
+        }
+        let key = key.trim().to_ascii_lowercase();
+        match section {
+            Some(0) => {
+                interface.insert(key, value);
+            }
+            Some(peer) => {
+                if let Some(target) = peers.get_mut(peer - 1) {
+                    target.insert(key, value);
+                }
+            }
+            None => {}
+        }
+    }
+
+    let Some(private_key) = interface
+        .get("privatekey")
+        .filter(|value| !value.is_empty())
+    else {
+        return Vec::new();
+    };
+    peers
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, peer)| {
+            let endpoint = peer.get("endpoint")?;
+            let (host, port) = endpoint_host_port(endpoint)?;
+            let public_key = peer.get("publickey").filter(|value| !value.is_empty())?;
+            let mut server = VlessServer::base(
+                "wireguard",
+                host.clone(),
+                port,
+                format!("WireGuard Peer {} ({host}:{port})", index + 1),
+            );
+            server.uuid = private_key.clone();
+            server.public_key = Some(public_key.clone());
+            server.transport = "wireguard".into();
+            if let Some(value) = interface.get("address") {
+                server
+                    .raw_params
+                    .insert("localAddress".into(), value.clone());
+            }
+            if let Some(value) = interface.get("mtu") {
+                server.raw_params.insert("mtu".into(), value.clone());
+            }
+            if let Some(value) = peer.get("presharedkey") {
+                server
+                    .raw_params
+                    .insert("preSharedKey".into(), value.clone());
+            }
+            if let Some(value) = peer.get("reserved") {
+                server.raw_params.insert("reserved".into(), value.clone());
+            }
+            if let Some(value) = peer.get("allowedips") {
+                server.raw_params.insert("allowedIPs".into(), value.clone());
+            }
+            if let Some(value) = peer.get("persistentkeepalive") {
+                server.raw_params.insert("keepAlive".into(), value.clone());
+            }
+            Some(server)
+        })
+        .collect()
+}
+
+pub fn looks_like_wireguard_config(body: &str) -> bool {
+    let mut has_interface = false;
+    let mut has_peer = false;
+    for line in body.lines().map(str::trim) {
+        has_interface |= line.eq_ignore_ascii_case("[Interface]");
+        has_peer |= line.eq_ignore_ascii_case("[Peer]");
+    }
+    has_interface && has_peer
+}
+
 /// Parse a single `vless://` URI.
 pub fn parse_vless(uri: &str) -> Result<VlessServer, ParseError> {
     let url = Url::parse(uri.trim()).map_err(|e| ParseError::InvalidUri(e.to_string()))?;
@@ -715,7 +1110,7 @@ pub fn parse_vless(uri: &str) -> Result<VlessServer, ParseError> {
     }
     let uuid = percent_decode(uuid);
 
-    let host = url.host_str().ok_or(ParseError::MissingHost)?.to_string();
+    let host = url_host(&url).ok_or(ParseError::MissingHost)?;
     let port = url.port().ok_or(ParseError::MissingPort)?;
 
     let params: HashMap<String, String> = url
@@ -771,7 +1166,7 @@ pub fn parse_trojan(uri: &str) -> Result<VlessServer, ParseError> {
     if password.is_empty() {
         return Err(ParseError::MissingCredentials);
     }
-    let host = url.host_str().ok_or(ParseError::MissingHost)?.to_string();
+    let host = url_host(&url).ok_or(ParseError::MissingHost)?;
     let port = url.port().ok_or(ParseError::MissingPort)?;
     let params: HashMap<String, String> = url
         .query_pairs()
@@ -954,14 +1349,27 @@ pub fn parse_vmess(uri: &str) -> Result<VlessServer, ParseError> {
     Ok(s)
 }
 
-/// Parse a subscription body: a list of proxy URIs (plaintext or base64).
-/// Lines with unsupported schemes are skipped.
+/// Parse a subscription body: JSON, a standard WireGuard config, or a list of
+/// proxy URIs (plaintext or base64). Invalid/unsupported entries are skipped.
 pub fn parse_subscription(body: &str) -> Vec<VlessServer> {
-    let trimmed = body.trim_start_matches('\u{feff}').trim_start();
-    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+    let original = body.trim_start_matches('\u{feff}').trim_start();
+    if original.starts_with('{')
+        || (original.starts_with('[') && !looks_like_wireguard_config(original))
+    {
+        return parse_json_subscription(original).1;
+    }
+
+    let text = decode_body(body);
+    let trimmed = text.trim_start_matches('\u{feff}').trim_start();
+    if trimmed.starts_with('{')
+        || (trimmed.starts_with('[') && !looks_like_wireguard_config(trimmed))
+    {
         return parse_json_subscription(trimmed).1;
     }
-    let text = decode_body(body);
+    if looks_like_wireguard_config(trimmed) {
+        return parse_wireguard_config(trimmed);
+    }
+
     text.lines()
         .filter_map(|line| {
             let trimmed = line.trim();
@@ -993,11 +1401,8 @@ fn b64_decode_str(s: &str) -> Option<String> {
 
 fn decode_body(body: &str) -> String {
     let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
-    // Already plaintext if it carries any proxy URI scheme.
-    if ["vless://", "trojan://", "ss://", "vmess://"]
-        .iter()
-        .any(|s| compact.contains(s))
-    {
+    // Already plaintext if it carries a proxy URI or WireGuard sections.
+    if body.lines().any(|line| is_supported_uri(line.trim())) || looks_like_wireguard_config(body) {
         return body.to_string();
     }
     for engine in [
@@ -1552,16 +1957,219 @@ mod tests {
     }
 
     #[test]
-    fn subscription_keeps_mixed_protocols() {
-        let creds = base64::engine::general_purpose::STANDARD.encode("aes-256-gcm:pw");
-        let body = format!(
-            "vless://a@h-a:443?type=tcp&security=reality#A\nss://{creds}@h-b:2060#B\ntrojan://p@h-c:443#C\nfoobar://nope"
+    fn parses_http_and_socks_proxy_links_without_mistaking_web_paths() {
+        let http = parse_proxy_uri(
+            "https://alice:p%40ss@proxy.example:8443/?sni=tls.example#Secure%20HTTP",
+        )
+        .unwrap();
+        assert_eq!(http.protocol, "http");
+        assert_eq!(http.uuid, "alice");
+        assert_eq!(http.password.as_deref(), Some("p@ss"));
+        assert_eq!(http.security, "tls");
+        assert_eq!(http.sni.as_deref(), Some("tls.example"));
+        assert_eq!(http.label, "Secure HTTP");
+
+        let credentials = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode("bob:s3cret");
+        let socks =
+            parse_proxy_uri(&format!("socks5://{credentials}@socks.example:1080#SOCKS")).unwrap();
+        assert_eq!(socks.protocol, "socks");
+        assert_eq!(socks.uuid, "bob");
+        assert_eq!(socks.password.as_deref(), Some("s3cret"));
+
+        let legacy = base64::engine::general_purpose::STANDARD
+            .encode("legacy:secret@legacy-socks.example:1081");
+        let legacy = parse_proxy_uri(&format!("socks://{legacy}#Legacy")).unwrap();
+        assert_eq!(legacy.host, "legacy-socks.example");
+        assert_eq!(legacy.uuid, "legacy");
+        assert_eq!(legacy.password.as_deref(), Some("secret"));
+
+        assert!(parse_proxy_uri("https://example.com:443/subscription/token").is_err());
+        assert!(is_unambiguous_direct_proxy_uri(
+            "http://user:pass@proxy.example:3128"
+        ));
+        assert!(!is_unambiguous_direct_proxy_uri(
+            "https://provider.example:443/sub"
+        ));
+    }
+
+    #[test]
+    fn parses_strict_hysteria2_links_and_rejects_unsupported_weakening() {
+        let server =
+            parse_proxy_uri("hy2://auth%3Avalue@hy.example:443/?sni=edge.example&alpn=h3#Hysteria")
+                .unwrap();
+        assert_eq!(server.protocol, "hysteria");
+        assert_eq!(server.uuid, "auth:value");
+        assert_eq!(server.transport, "hysteria");
+        assert_eq!(server.security, "tls");
+        assert_eq!(server.sni.as_deref(), Some("edge.example"));
+        assert_eq!(
+            server.raw_params.get("alpn").map(String::as_str),
+            Some("h3")
         );
-        let v = parse_subscription(&body);
-        assert_eq!(v.len(), 3);
-        assert_eq!(v[0].protocol, "vless");
-        assert_eq!(v[1].protocol, "shadowsocks");
-        assert_eq!(v[2].protocol, "trojan");
+        assert_eq!(
+            parse_proxy_uri("hysteria2://auth@hy.example/#DefaultPort")
+                .unwrap()
+                .port,
+            443
+        );
+
+        for query in [
+            "insecure=1",
+            "allowInsecure=true",
+            "insecure=0&allowInsecure=true",
+            "obfs=salamander&obfs-password=secret",
+            "mport=20000-30000",
+            "pinSHA256=deadbeef",
+            "ech=AAAA",
+        ] {
+            assert!(
+                parse_proxy_uri(&format!("hysteria2://auth@hy.example:443/?{query}")).is_err(),
+                "unsafe/unsupported query was accepted: {query}"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_wireguard_uri_and_standard_config() {
+        let uri = "wireguard://private%2Bkey%2F%3D@wg.example:51820?publickey=public%2Bkey%2F%3D&presharedkey=shared%2Bkey%2F%3D&address=10.7.0.2%2F32&reserved=1%2C2%2C3&mtu=1380#WG";
+        let server = parse_proxy_uri(uri).unwrap();
+        assert_eq!(server.protocol, "wireguard");
+        assert_eq!(server.uuid, "private+key/=");
+        assert_eq!(server.public_key.as_deref(), Some("public+key/="));
+        assert_eq!(
+            server.raw_params.get("preSharedKey").map(String::as_str),
+            Some("shared+key/=")
+        );
+        assert_eq!(
+            server.raw_params.get("localAddress").map(String::as_str),
+            Some("10.7.0.2/32")
+        );
+        let proposed = parse_proxy_uri(
+            "wireguard://wg-query.example:51820?private_key=private%2Bkey&peer_public_key=public%2Bkey&allowed_ips=0.0.0.0%2F0&persistent_keepalive=20",
+        )
+        .unwrap();
+        assert_eq!(proposed.uuid, "private+key");
+        assert_eq!(proposed.public_key.as_deref(), Some("public+key"));
+        assert_eq!(
+            proposed.raw_params.get("allowedIPs").map(String::as_str),
+            Some("0.0.0.0/0")
+        );
+        assert_eq!(
+            proposed.raw_params.get("keepAlive").map(String::as_str),
+            Some("20")
+        );
+
+        let config = r#"
+[Interface]
+PrivateKey = private-key
+Address = 10.8.0.2/32, fd00::2/128
+DNS = 1.1.1.1
+MTU = 1420
+
+[Peer]
+PublicKey = public-one
+PresharedKey = shared-one
+Endpoint = wg-one.example:51820
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
+
+[Peer]
+PublicKey = public-two
+Endpoint = [2001:db8:1::10]:2408
+AllowedIPs = 0.0.0.0/0
+"#;
+        assert!(looks_like_wireguard_config(config));
+        let peers = parse_subscription(config);
+        assert_eq!(peers.len(), 2);
+        assert_eq!(peers[0].host, "wg-one.example");
+        assert_eq!(peers[0].port, 51820);
+        assert_eq!(peers[0].uuid, "private-key");
+        assert_eq!(peers[0].public_key.as_deref(), Some("public-one"));
+        assert_eq!(
+            peers[0].raw_params.get("allowedIPs").map(String::as_str),
+            Some("0.0.0.0/0, ::/0")
+        );
+        assert_eq!(
+            peers[0].raw_params.get("keepAlive").map(String::as_str),
+            Some("25")
+        );
+        let first_config = crate::xray::build_xray_config(
+            &peers[0],
+            &crate::split::SplitInput::default(),
+            false,
+            "warn",
+        );
+        assert_eq!(
+            first_config["outbounds"][0]["settings"]["peers"][0]["allowedIPs"],
+            serde_json::json!(["0.0.0.0/0", "::/0"])
+        );
+        assert_eq!(
+            first_config["outbounds"][0]["settings"]["peers"][0]["keepAlive"],
+            25
+        );
+        assert_eq!(
+            peers[0].raw_params.get("localAddress").map(String::as_str),
+            Some("10.8.0.2/32, fd00::2/128")
+        );
+        assert_eq!(peers[1].host, "2001:db8:1::10");
+        assert_eq!(peers[1].port, 2408);
+        crate::xray::validate_server(&peers[1]).unwrap();
+        let xray_config = crate::xray::build_xray_config(
+            &peers[1],
+            &crate::split::SplitInput::default(),
+            false,
+            "warn",
+        );
+        assert_eq!(
+            xray_config["outbounds"][0]["settings"]["peers"][0]["endpoint"],
+            "[2001:db8:1::10]:2408"
+        );
+
+        let encoded = base64::engine::general_purpose::STANDARD.encode(config);
+        assert_eq!(parse_subscription(&encoded).len(), 2);
+    }
+
+    #[test]
+    fn subscription_share_links_cover_every_xray_proxy_protocol() {
+        let ss = base64::engine::general_purpose::STANDARD.encode("aes-256-gcm:pw");
+        let vmess_json =
+            r#"{"v":"2","ps":"VMess","add":"vm.example","port":"443","id":"uuid","net":"tcp"}"#;
+        let vmess = base64::engine::general_purpose::STANDARD.encode(vmess_json);
+        let body = format!(
+            "vless://a@vl.example:443#VLESS\nvmess://{vmess}\ntrojan://p@tr.example:443#Trojan\nss://{ss}@ss.example:8388#SS\nhy2://auth@hy.example:443/#HY\nwireguard://private@wg.example:51820?publickey=public&address=10.0.0.2%2F32#WG\nhttp://u:p@http.example:3128#HTTP\nsocks5://u:p@socks.example:1080#SOCKS"
+        );
+        let servers = parse_subscription(&body);
+        assert_eq!(servers.len(), 8);
+        for server in &servers {
+            crate::xray::validate_server(server).unwrap_or_else(|error| {
+                panic!("{} share-link was rejected: {error}", server.protocol)
+            });
+            let config = crate::xray::build_xray_config(
+                server,
+                &crate::split::SplitInput::default(),
+                false,
+                "warn",
+            );
+            assert_eq!(config["outbounds"][0]["protocol"], server.protocol);
+        }
+        assert_eq!(
+            servers
+                .iter()
+                .map(|server| server.protocol.as_str())
+                .collect::<std::collections::BTreeSet<_>>(),
+            [
+                "http",
+                "hysteria",
+                "shadowsocks",
+                "socks",
+                "trojan",
+                "vless",
+                "vmess",
+                "wireguard",
+            ]
+            .into_iter()
+            .collect()
+        );
     }
 
     #[test]

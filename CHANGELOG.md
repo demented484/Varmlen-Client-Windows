@@ -2,6 +2,8 @@
 
 ## 0.3.0 Preview
 
+- Import share links for every supported Xray proxy outbound: add Hysteria2,
+  WireGuard, HTTP and SOCKS5 URI parsing plus standard WireGuard config files.
 - Reject subscription and JSON settings that disable TLS certificate or
   hostname validation; strengthen subscription SSRF, redirect, and size checks.
 - Harden the Windows service DACL and allow uninstall to continue when a
