@@ -6,7 +6,9 @@ Audited `main` around `0946e3f` and the follow-up hardening produced by this
 review. The review covered the Tauri/WebView boundary, subscription parsing,
 Xray configuration generation, the LocalSystem service and named-pipe protocol,
 TUN lifecycle, split routing, persistent state, NSIS install/upgrade/uninstall,
-CI, and bundled runtime provenance.
+CI, and bundled runtime provenance. For the closest like-for-like comparison,
+v2rayN source was additionally reviewed at commit
+`31044f449db5562aedb871daf69c0873e4b8a768`.
 
 This is a source review plus Linux-hosted x64/ARM64 cross-build testing. It is
 not a substitute for Windows Driver Verifier, packet-capture leak tests, sleep /
@@ -221,20 +223,76 @@ needed.
   vulnerabilities in the Windows path at review time. Cargo reported
   informational GTK3/unmaintained warnings from non-Windows Tauri dependencies.
 
+## Focused comparison with v2rayN
+
+v2rayN is the closest functional comparator: both applications consume
+provider subscriptions, generate Xray-family configurations, launch a user-mode
+core, and can use native TUN plus domain/process routing. It is a general proxy
+manager rather than a fail-closed VPN security product, so `strict_route` must
+not be read as a complete kill switch.
+
+### Where v2rayN is ahead
+
+- Much broader and more mature profile ecosystem: Xray, sing-box, Mihomo and
+  other cores; more transports, subscription formats, custom configurations,
+  routing editors, system-proxy modes, speed tests and backup features.
+- TUN exposes `auto_route`, `strict_route`, route exclusions, interface binding,
+  IPv6 and ICMP policy. It can use sing-box as a TUN front-end for another core.
+- Its native config builder is considerably broader than Varmlen's current
+  normalized profile builder, and profiles/subscriptions live in native SQLite
+  rather than a WebView origin.
+- Public release workflows produce detached GPG signatures with a documented
+  fingerprint.
+
+### Where Varmlen has the stronger Windows security boundary
+
+- v2rayN requires the whole GUI to restart with `runas` before Windows TUN can
+  be enabled, then launches the selected core as a child of that elevated GUI.
+  Varmlen keeps the WebView/GUI unprivileged and delegates fixed lifecycle
+  operations to a separately installed, SID-restricted service.
+- v2rayN intentionally accepts arbitrary custom core configs and supports
+  replaceable/multiple cores. That flexibility increases the elevated parsing,
+  executable and configuration surface. Varmlen ships fixed Xray/Wintun paths
+  under Program Files ACLs, although its opaque JSON IPC finding still prevents
+  this boundary from being considered complete.
+- v2rayN accepts HTTP subscription URLs, URL credentials and automatic
+  redirects, and does not implement Varmlen's public-address DNS pinning/SSRF
+  policy. This is compatible with local/self-hosted proxy-manager use cases but
+  is weaker for bearer-token subscriptions.
+- v2rayN preserves `allowInsecure` compatibility and warns about insecure
+  profiles; hardened Varmlen now rejects them. This is a deliberate
+  compatibility-versus-policy difference, not evidence that v2rayN claims
+  strict VPN-grade TLS policy.
+
+### Shared limitations
+
+Neither reviewed design has a dedicated Windows fail-closed firewall/callout
+backend or explicit process-tree split enforcement. Both therefore depend on
+user-mode-core routing semantics and need empirical DNS/IPv4/IPv6, process,
+network-change and sleep/resume testing. v2rayN stores URLs and credentials in
+an unencrypted SQLite database; Varmlen stores them in WebView localStorage.
+Neither is equivalent to a DPAPI-backed secret store. v2rayN's GPG signatures
+provide downloadable-artifact integrity when users verify them, but no
+Authenticode signing step was found in the reviewed public Windows workflow.
+
 ## Comparison with OSS Windows clients
 
-| Area | Varmlen preview | Mullvad | IVPN | PIA | Windscribe | sing-box-style TUN |
-|---|---|---|---|---|---|---|
-| Privileged control plane | LocalSystem Rust service, SID-restricted pipe | Privileged daemon, local management pipe | Privileged daemon/service | Privileged service | Privileged helper/service | Depends on wrapper |
-| Data plane | Xray native Wintun TUN | WireGuard/OpenVPN + platform routing | WireGuard/OpenVPN | WireGuard/OpenVPN | WireGuard/OpenVPN | User-mode TUN |
-| Kill switch | Disabled / unavailable | Always-on state firewall, atomic changes | WFP firewall incl. boot handling | WFP firewall | Proactive firewall | `strict_route` adds limited WFP/DNS behavior |
-| App split | Xray process/path rule | Dedicated signed KMDF/WFP split driver | Signed WFP callout driver with process tracking | Signed WFP callout driver | Signed split-tunnel callout driver | Process rules; platform caveats |
-| Child process handling | No explicit process tree | Driver tracks process trees, with documented edge cases | Driver process monitor tracks parent/child | Driver/classify logic | Driver/helper logic | Matcher-dependent |
-| DNS split/leak control | Xray DNS + TUN routes; no fail-closed WFP | Firewall/DNS integration | Hardened firewall/DNS integration | Driver DNS flow tracking and packet rewrite | DNS firewall/helper | `strict_route` can block port 53 outside TUN |
-| Driver signing burden | None currently | Yes | Yes | EV-signed driver required | Yes | Usually none unless strict integration |
-| Preview reliability risk | Lower after removing active WFP, but weaker guarantees | Larger mature platform stack | Larger mature platform stack | Larger mature platform stack | Larger mature platform stack | Similar route-change caveats |
+| Area | Varmlen preview | v2rayN | Mullvad | IVPN | PIA | Windscribe | sing-box-style TUN |
+|---|---|---|---|---|---|---|---|
+| Privileged control plane | LocalSystem Rust service, SID-restricted pipe; GUI unprivileged | Entire GUI/core elevated for TUN; no separate Windows service | Privileged daemon, local management pipe | Privileged daemon/service | Privileged service | Privileged helper/service | Depends on wrapper |
+| Data plane | Xray native Wintun TUN | Xray/sing-box/Mihomo and other cores; system proxy or TUN | WireGuard/OpenVPN + platform routing | WireGuard/OpenVPN | WireGuard/OpenVPN | WireGuard/OpenVPN | User-mode TUN |
+| Kill switch | Disabled / unavailable | No dedicated kill switch; sing-box `strict_route` is limited | Always-on state firewall, atomic changes | WFP firewall incl. boot handling | WFP firewall | Proactive firewall | `strict_route` adds limited WFP/DNS behavior |
+| App split | Xray process/path rule | Xray/sing-box process name/path routing | Dedicated signed KMDF/WFP split driver | Signed WFP callout driver with process tracking | Signed WFP callout driver | Signed split-tunnel callout driver | Process rules; platform caveats |
+| Child process handling | No explicit process tree | No dedicated process-tree enforcement | Driver tracks process trees, with documented edge cases | Driver process monitor tracks parent/child | Driver/classify logic | Driver/helper logic | Matcher-dependent |
+| DNS split/leak control | Xray DNS + TUN routes; no fail-closed WFP | Core DNS routing; sing-box strict route can reduce DNS leaks | Firewall/DNS integration | Hardened firewall/DNS integration | Driver DNS flow tracking and packet rewrite | DNS firewall/helper | `strict_route` can block port 53 outside TUN |
+| Secret persistence | WebView localStorage, plaintext | Native SQLite, plaintext | Native app-managed storage | Native app-managed storage | Native app-managed storage | Native app-managed storage | Wrapper-dependent |
+| Release authentication | Preview artifacts unsigned | Detached GPG signatures; no public Authenticode step found | Signed Windows packages/components | Signed Windows packages/components | Signed Windows packages/components | Signed Windows packages/components | Project/wrapper-dependent |
+| Driver signing burden | None currently | None for normal core/TUN path | Yes | Yes | EV-signed driver required | Yes | Usually none unless strict integration |
+| Reliability/security tradeoff | Narrower product with separated privilege, but incomplete service API and weaker enforcement | Broad compatibility and mature proxy features, but larger elevated surface and no fail-closed firewall | Larger mature platform stack | Larger mature platform stack | Larger mature platform stack | Larger mature platform stack | Similar route-change caveats |
 
-The relevant lesson is not “copy another client's WFP rules.” Mature clients
+The direct v2rayN lesson is to reuse its broad typed profile/config-builder
+ideas, not its full-GUI elevation model. The broader lesson is not “copy another
+client's WFP rules.” Mature VPN clients
 combine a typed privileged daemon, atomic firewall state machine, signed callout
 or split drivers, process lifecycle tracking, DNS-specific handling, route and
 power notifications, installer rollback, and extensive Windows testing. Taking
@@ -257,6 +315,9 @@ only one component reproduces neither their guarantees nor their reliability.
 
 ## External references
 
+- v2rayN source: https://github.com/2dust/v2rayN
+- v2rayN TUN configuration builder: https://github.com/2dust/v2rayN/tree/master/v2rayN/ServiceLib/Services/CoreConfig
+- v2rayN release-signing workflow: https://github.com/2dust/v2rayN/blob/master/.github/workflows/upload-sign.yml
 - Mullvad security architecture: https://github.com/mullvad/mullvadvpn-app/blob/main/docs/security.md
 - Mullvad split-tunneling semantics: https://github.com/mullvad/mullvadvpn-app/blob/main/docs/split-tunneling.md
 - Mullvad Windows split driver: https://github.com/mullvad/win-split-tunnel
