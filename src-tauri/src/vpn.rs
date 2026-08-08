@@ -58,6 +58,7 @@ pub async fn vpn_connect(
     log_level: Option<String>,
 ) -> Result<HelperResponse, String> {
     validate_server(&server)?;
+    let _ = killswitch;
     let _operation = vpn_op_lock().lock().await;
     let apps_selective = split.apps_selective();
     let app_selectors = resolve_app_selectors(&split.apps)?;
@@ -84,7 +85,10 @@ pub async fn vpn_connect(
         server_endpoints: endpoints,
         excluded_apps: app_selectors,
         apps_selective,
-        killswitch,
+        // User-mode WFP enforcement was removed from the Windows preview.
+        // Do not claim fail-closed behavior until a reviewed, signed backend is
+        // available; native Xray TUN routing remains fully functional.
+        killswitch: false,
         allow_lan,
     })
     .await?;

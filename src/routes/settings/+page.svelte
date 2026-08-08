@@ -270,17 +270,13 @@
           ariaLabel={t("settings.language")}
         />
       </div>
-      <label class="row">
+      <label class="row disabled">
         <div class="row-text">
           <div class="row-title">{t("settings.killswitch")}</div>
-          <div class="row-sub muted">{t("settings.killswitchSub")}</div>
+          <div class="row-sub muted">{t("settings.killswitchUnavailableWindows")}</div>
         </div>
         <span class="switch">
-          <input
-            type="checkbox"
-            checked={settings.killswitch}
-            onchange={(e) => settings.setKillswitch((e.currentTarget as HTMLInputElement).checked)}
-          />
+          <input type="checkbox" checked={false} disabled />
           <span class="slider"></span>
         </span>
       </label>

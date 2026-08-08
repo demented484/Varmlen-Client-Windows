@@ -69,6 +69,16 @@ impl<B> ConnectionController<B> {
             network_blocked: true,
         };
     }
+
+    pub fn force_disconnected(&mut self, operation_id: u64) {
+        self.state = ServiceState {
+            phase: ConnectionPhase::Disconnected,
+            operation_id,
+            split_active: false,
+            dns_protected: false,
+            network_blocked: false,
+        };
+    }
 }
 
 impl<B: ConnectionBackend + Send> ConnectionController<B> {

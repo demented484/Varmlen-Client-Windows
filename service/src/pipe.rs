@@ -94,26 +94,21 @@ impl RuntimeExecutor {
             Ok(Some(record)) => {
                 let operation_id = record.operation_id;
                 let recovery = match record.phase {
-                    DesiredStatePhase::Connected { request } => {
+                    DesiredStatePhase::Connected { mut request } => {
+                        request.killswitch = false;
                         controller.connect(operation_id, request).await
                     }
                     DesiredStatePhase::Connecting {
-                        previous: Some(previous),
-                        ..
-                    } => controller.connect(operation_id, previous).await,
-                    DesiredStatePhase::Connecting {
-                        requested_kill_switch,
+                        previous: Some(mut previous),
                         ..
                     } => {
-                        controller
-                            .disconnect(operation_id, requested_kill_switch)
-                            .await
+                        previous.killswitch = false;
+                        controller.connect(operation_id, previous).await
                     }
-                    DesiredStatePhase::Disconnecting { keep_blocked } => {
-                        controller.disconnect(operation_id, keep_blocked).await
-                    }
-                    DesiredStatePhase::Blocked { .. } => {
-                        controller.disconnect(operation_id, true).await
+                    DesiredStatePhase::Connecting { .. }
+                    | DesiredStatePhase::Disconnecting { .. }
+                    | DesiredStatePhase::Blocked { .. } => {
+                        controller.disconnect(operation_id, false).await
                     }
                     DesiredStatePhase::Disconnected => {
                         controller.disconnect(operation_id, false).await
@@ -125,9 +120,10 @@ impl RuntimeExecutor {
             Err(_) => (0, controller.disconnect(0, false).await),
         };
         if recovery.is_err() {
-            // Keep the recovery IPC available even when startup reconciliation
-            // cannot prove a safe terminal state.
-            controller.force_blocked(operation_id);
+            // This preview has no fail-closed Windows backend. Keep IPC
+            // available and report the real fail-open state instead of claiming
+            // that traffic is blocked.
+            controller.force_disconnected(operation_id);
         }
         Ok(Self {
             controller: Mutex::new(controller),
@@ -147,18 +143,20 @@ impl CommandExecutor for RuntimeExecutor {
             ServiceCommand::Status => Ok(ServiceResponse::State(
                 self.controller.lock().await.state().clone(),
             )),
-            ServiceCommand::Connect(request) => self
+            ServiceCommand::Connect(mut request) => {
+                request.killswitch = false;
+                self.controller
+                    .lock()
+                    .await
+                    .connect(operation_id, request)
+                    .await
+                    .map(ServiceResponse::State)
+            }
+            ServiceCommand::Disconnect { .. } => self
                 .controller
                 .lock()
                 .await
-                .connect(operation_id, request)
-                .await
-                .map(ServiceResponse::State),
-            ServiceCommand::Disconnect { keep_blocked } => self
-                .controller
-                .lock()
-                .await
-                .disconnect(operation_id, keep_blocked)
+                .disconnect(operation_id, false)
                 .await
                 .map(ServiceResponse::State),
             ServiceCommand::LogTail { max_bytes } => tail_log(&self.log_path, max_bytes as usize)

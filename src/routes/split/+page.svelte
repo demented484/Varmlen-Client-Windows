@@ -50,6 +50,14 @@
     }
   }
 
+  function appPathLabel(path: string): string {
+    const normalized = path.replaceAll("/", "\\");
+    const parts = normalized.split("\\").filter(Boolean);
+    if (parts.length <= 3) return normalized;
+    const drive = /^[A-Za-z]:$/.test(parts[0] ?? "") ? `${parts[0]}\\` : "";
+    return `${drive}…\\${parts.slice(-2).join("\\")}`;
+  }
+
   function toggleSelect(app: InstalledApp) {
     const next = new Set(selected);
     if (next.has(app.id)) next.delete(app.id);
@@ -165,7 +173,7 @@
             {@render appIcon(a.icon)}
             <div class="app-text">
               <div class="app-name">{a.name}</div>
-              <div class="app-id dim">{a.id}</div>
+              <div class="app-id dim" title={a.id}>{appPathLabel(a.id)}</div>
             </div>
             <button class="btn-ghost trash" onclick={() => split.removeApp(a.id)} aria-label="Remove">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M6 18L18 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
@@ -253,7 +261,7 @@
               {@render appIcon(app.icon)}
               <div class="app-text">
                 <div class="app-name">{app.name}</div>
-                <div class="app-id dim">{app.id}</div>
+                <div class="app-id dim" title={app.id}>{appPathLabel(app.id)}</div>
               </div>
               {#if addedIds.has(app.id) || selected.has(app.id)}
                 <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
@@ -405,6 +413,10 @@
     font-weight: 500;
   }
   .app-id {
+    max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
     font-size: 11px;
     font-family: ui-monospace, "JetBrains Mono", monospace;
     margin-top: 1px;

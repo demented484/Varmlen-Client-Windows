@@ -121,6 +121,19 @@ impl ConnectionBackend for RecordingBackend {
     }
 }
 
+#[test]
+fn forced_fail_open_state_is_truthful() {
+    let mut controller = ConnectionController::disconnected(RecordingBackend::healthy());
+    controller.force_blocked(4);
+    assert_eq!(controller.state().phase, ConnectionPhase::Blocked);
+    assert!(controller.state().network_blocked);
+
+    controller.force_disconnected(5);
+    assert_eq!(controller.state().phase, ConnectionPhase::Disconnected);
+    assert!(!controller.state().network_blocked);
+    assert_eq!(controller.state().operation_id, 5);
+}
+
 fn valid_connect() -> ConnectRequest {
     ConnectRequest {
         xray_config: r#"{"inbounds":[],"outbounds":[]}"#.into(),

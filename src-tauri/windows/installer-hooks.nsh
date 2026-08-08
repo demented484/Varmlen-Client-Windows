@@ -107,8 +107,8 @@
   Pop $0
   Pop $1
   ${If} $0 != 0
-    MessageBox MB_ICONSTOP "Varmlen could not remove its persistent WFP policy. Uninstall was stopped so the recovery executable remains available.$\r$\n$1"
-    Abort
+    DetailPrint "Legacy WFP cleanup warning: $1"
+    MessageBox MB_ICONEXCLAMATION "Varmlen could not fully remove its legacy WFP metadata. Uninstallation will continue; no Varmlen WFP policy is used by this build.$\r$\n$1"
   ${EndIf}
   nsExec::ExecToStack 'sc.exe delete VarmlenService'
   Pop $0

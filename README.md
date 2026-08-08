@@ -28,17 +28,18 @@ tunneling. Built on Tauri 2 and SvelteKit.
 - VLESS, VMess, Trojan, Shadowsocks, Hysteria, WireGuard, HTTP and SOCKS
   outbounds, including provider-supplied multi-outbound JSON profiles.
 - Per-app and per-domain split tunneling in independent general/selective modes.
-- Transactional reconnect: a temporary WFP hold is installed before the active
-  tunnel is stopped, and the previous connection is restored if the candidate
-  fails.
-- DNS leak prevention and dual-stack WFP policy, including LAN-safe port 53
-  blocking.
-- A `LocalSystem` service owns Xray, Wintun, WFP and encrypted desired state, so
-  the tunnel survives closing the GUI.
+- Transactional reconnect: the candidate is validated before the active tunnel
+  is stopped, and the previous connection is restored if the candidate fails.
+- DNS is intercepted by the native TUN and resolved through Xray's proxied DoH
+  path instead of the physical adapter resolver.
+- A `LocalSystem` service owns Xray, Wintun and encrypted desired state, so the
+  tunnel survives closing the GUI.
 - Xray configuration syntax and actual SOCKS5 reachability are checked before
-  network policy changes.
-- Unexpected Xray exits are detected by the service; the configured kill switch
-  remains fail-closed even when the GUI is not running.
+  the native TUN is changed.
+- Executable discovery covers 32-bit and 64-bit App Paths and installed-program
+  registry entries, with real executable icons and a manual `.exe` picker.
+- The kill switch is deliberately disabled in this preview while the previous
+  user-mode WFP enforcement is replaced.
 
 ## Security model
 
@@ -48,9 +49,9 @@ commands to `LocalSystem` and the interactive user recorded by the installer.
 Runtime binaries live under the machine installation directory; mutable state
 is protected under `%ProgramData%\Varmlen`.
 
-WFP provider, sublayer and filters are persistent. Installation, reconnect and
-cleanup use explicit transactions so a failed candidate cannot briefly expose
-ordinary traffic.
+The connection path does not install WFP filters. The service and uninstaller
+retain bounded best-effort cleanup for policy left by earlier preview builds;
+a cleanup warning never prevents the user from uninstalling Varmlen.
 
 See [the architecture](docs/design/2026-07-29-windows-client.md).
 

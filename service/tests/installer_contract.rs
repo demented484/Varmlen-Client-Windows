@@ -30,11 +30,18 @@ fn install_waits_for_ipc_readiness_and_does_not_grant_user_modify() {
 }
 
 #[test]
-fn uninstall_aborts_before_deleting_recovery_when_cleanup_fails() {
+fn uninstall_is_never_held_hostage_by_legacy_wfp_cleanup() {
     let uninstall = macro_body("NSIS_HOOK_PREUNINSTALL");
     assert!(uninstall.contains("ExecToStack"));
     assert!(uninstall.contains("--cleanup"));
-    assert!(uninstall.contains("Abort"));
+    let cleanup_warning = uninstall
+        .find("Legacy WFP cleanup warning")
+        .expect("cleanup warning exists");
+    let service_delete = uninstall
+        .find("sc.exe delete VarmlenService")
+        .expect("service is deleted");
+    assert!(cleanup_warning < service_delete);
+    assert!(!uninstall[cleanup_warning..service_delete].contains("Abort"));
 }
 
 #[test]

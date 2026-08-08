@@ -9,8 +9,7 @@ use varmlen_protocol::{ConnectRequest, ServiceError, ServiceErrorCode};
 use varmlen_service_core::{
     controller::ConnectionBackend,
     runtime::{
-        inspect_native_tun_config, inspect_validation_config, PolicyMode, PolicySpec,
-        RuntimeLayout, TUN_IPV4_GATEWAY,
+        inspect_native_tun_config, inspect_validation_config, RuntimeLayout, TUN_IPV4_GATEWAY,
     },
 };
 
@@ -19,12 +18,11 @@ use crate::{
     windows_adapter::{find_varmlen_adapter, AdapterInfo},
     windows_process::{prepare_native_config, validate_config, ManagedXray, PreparedXrayConfig},
     windows_state::{ensure_state_directory, persist_desired_state, runtime_layout},
-    windows_wfp::WfpEngine,
+    windows_wfp::cleanup_persistent_policy,
 };
 
 pub struct WindowsBackend {
     layout: RuntimeLayout,
-    wfp: WfpEngine,
     active: Option<ManagedXray>,
     active_request: Option<ConnectRequest>,
     previous_request: Option<ConnectRequest>,
@@ -37,9 +35,13 @@ impl WindowsBackend {
     pub fn open() -> io::Result<Self> {
         let layout = runtime_layout()?;
         ensure_state_directory(&layout)?;
+        // Version 0.3.0 preview used persistent user-mode WFP filters for a
+        // kill switch. They made connection and even uninstallation depend on
+        // fragile filter enumeration. The native Xray TUN does not need them;
+        // clean up old policy best-effort and keep the data path independent.
+        let _ = cleanup_persistent_policy();
         Ok(Self {
             layout,
-            wfp: WfpEngine::open()?,
             active: None,
             active_request: None,
             previous_request: None,
@@ -110,30 +112,6 @@ impl WindowsBackend {
             .ok_or_else(|| io::Error::other("DNS health check returned no addresses"))?;
         Ok(())
     }
-
-    fn policy(&self, request: &ConnectRequest, mode: PolicyMode) -> PolicySpec {
-        PolicySpec {
-            mode,
-            allow_lan: request.allow_lan,
-            xray_path: self.layout.xray_executable.clone(),
-            excluded_apps: request
-                .excluded_apps
-                .iter()
-                .map(|app| PathBuf::from(&app.canonical_path))
-                .collect(),
-            apps_selective: request.apps_selective,
-        }
-    }
-
-    fn hold_policy(&self) -> PolicySpec {
-        PolicySpec {
-            mode: PolicyMode::Hold,
-            allow_lan: false,
-            xray_path: self.layout.xray_executable.clone(),
-            excluded_apps: Vec::new(),
-            apps_selective: false,
-        }
-    }
 }
 
 #[async_trait]
@@ -184,18 +162,13 @@ impl ConnectionBackend for WindowsBackend {
                 self.pending_operation_id,
                 candidate.clone(),
                 self.active_request.clone(),
-                candidate.killswitch,
+                false,
             ),
         )
-        .map_err(|error| service_error(ServiceErrorCode::Internal, error))?;
-        self.wfp
-            .apply_policy(&self.hold_policy())
-            .map_err(|error| service_error(ServiceErrorCode::HoldFailed, error))
+        .map_err(|error| service_error(ServiceErrorCode::Internal, error))
     }
 
     async fn verify_transition_hold(&mut self) -> Result<(), ServiceError> {
-        // apply_policy verifies every persistent filter by key after the
-        // transaction commits.
         Ok(())
     }
 
@@ -229,7 +202,7 @@ impl ConnectionBackend for WindowsBackend {
     }
 
     async fn commit_policy(&mut self, request: &ConnectRequest) -> Result<(), ServiceError> {
-        let adapter = find_varmlen_adapter()
+        let _adapter = find_varmlen_adapter()
             .map_err(|error| service_error(ServiceErrorCode::HealthCheckFailed, error))?
             .ok_or_else(|| {
                 service_error(
@@ -237,14 +210,6 @@ impl ConnectionBackend for WindowsBackend {
                     "Varmlen TUN adapter disappeared before policy commit",
                 )
             })?;
-        self.wfp
-            .apply_policy(&self.policy(
-                request,
-                PolicyMode::Connected {
-                    tun_luid: adapter.luid,
-                },
-            ))
-            .map_err(|error| service_error(ServiceErrorCode::HoldFailed, error))?;
         self.connected_health_check()
             .await
             .map_err(|error| service_error(ServiceErrorCode::HealthCheckFailed, error))?;
@@ -266,7 +231,6 @@ impl ConnectionBackend for WindowsBackend {
     }
 
     async fn release_transition_hold(&mut self) -> Result<(), ServiceError> {
-        // The connected policy atomically replaced the temporary hold.
         Ok(())
     }
 
@@ -284,17 +248,8 @@ impl ConnectionBackend for WindowsBackend {
             ManagedXray::start(&self.layout, &previous.xray_config)
                 .map_err(|error| service_error(ServiceErrorCode::RestoreFailed, error))?,
         );
-        let adapter = self
-            .wait_for_candidate()
+        self.wait_for_candidate()
             .await
-            .map_err(|error| service_error(ServiceErrorCode::RestoreFailed, error))?;
-        self.wfp
-            .apply_policy(&self.policy(
-                &previous,
-                PolicyMode::Connected {
-                    tun_luid: adapter.luid,
-                },
-            ))
             .map_err(|error| service_error(ServiceErrorCode::RestoreFailed, error))?;
         self.connected_health_check()
             .await
@@ -310,10 +265,10 @@ impl ConnectionBackend for WindowsBackend {
         Ok(())
     }
 
-    async fn clear_network_state(&mut self, keep_blocked: bool) -> Result<(), ServiceError> {
+    async fn clear_network_state(&mut self, _keep_blocked: bool) -> Result<(), ServiceError> {
         persist_desired_state(
             &self.layout,
-            &DesiredStateRecord::disconnecting(self.pending_operation_id, keep_blocked),
+            &DesiredStateRecord::disconnecting(self.pending_operation_id, false),
         )
         .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))?;
         self.stop_process()
@@ -323,28 +278,12 @@ impl ConnectionBackend for WindowsBackend {
         self.previous_request = None;
         self.candidate_request = None;
         self.prepared_candidate = None;
-        if keep_blocked {
-            self.wfp
-                .apply_policy(&self.hold_policy())
-                .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))?;
-            persist_desired_state(
-                &self.layout,
-                &DesiredStateRecord::blocked(
-                    self.pending_operation_id,
-                    "kill switch requested while disconnected",
-                ),
-            )
-            .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))
-        } else {
-            self.wfp
-                .clear_filters()
-                .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))?;
-            persist_desired_state(
-                &self.layout,
-                &DesiredStateRecord::disconnected(self.pending_operation_id),
-            )
-            .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))
-        }
+        let _ = cleanup_persistent_policy();
+        persist_desired_state(
+            &self.layout,
+            &DesiredStateRecord::disconnected(self.pending_operation_id),
+        )
+        .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))
     }
 
     async fn active_is_running(&mut self) -> Result<bool, ServiceError> {
@@ -357,9 +296,7 @@ impl ConnectionBackend for WindowsBackend {
     }
 
     fn unexpected_failure_keep_blocked(&self) -> bool {
-        self.active_request
-            .as_ref()
-            .is_some_and(|request| request.killswitch)
+        false
     }
 }
 

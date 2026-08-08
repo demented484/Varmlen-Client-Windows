@@ -1,5 +1,12 @@
 # Varmlen for Windows — design specification
 
+> **Preview implementation note (0.3.0):** the user-mode WFP enforcement
+> described below was removed from the active connection path after it caused
+> connection and uninstall failures on real Windows systems. Xray native TUN
+> and process/domain routing remain active; the kill switch is unavailable
+> until a reviewed replacement backend is adopted. Legacy WFP objects are
+> cleaned up best-effort during upgrade and uninstall.
+
 Date: 2026-07-29
 
 Status: proposed for implementation

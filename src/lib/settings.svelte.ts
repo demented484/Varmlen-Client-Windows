@@ -20,7 +20,7 @@ interface Persisted {
 
 const KEY = "varmlen.settings";
 const DEFAULTS: Persisted = {
-  killswitch: true,
+  killswitch: false,
   allowLan: true,
   closeToTray: true,
   logLevel: "warn",
@@ -37,7 +37,7 @@ function load(): Persisted {
     if (!raw) return DEFAULTS;
     const parsed = JSON.parse(raw) as Partial<Persisted>;
     return {
-      killswitch: parsed.killswitch ?? DEFAULTS.killswitch,
+      killswitch: false,
       allowLan: parsed.allowLan ?? DEFAULTS.allowLan,
       closeToTray: parsed.closeToTray ?? DEFAULTS.closeToTray,
       logLevel: LOG_LEVELS.includes(parsed.logLevel as LogLevel)
