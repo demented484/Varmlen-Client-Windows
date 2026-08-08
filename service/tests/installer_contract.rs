@@ -22,6 +22,10 @@ fn install_waits_for_ipc_readiness_and_does_not_grant_user_modify() {
     let postinstall = macro_body("NSIS_HOOK_POSTINSTALL");
     assert!(postinstall.contains("--health"));
     assert!(postinstall.contains("sc.exe config VarmlenService"));
+    assert!(postinstall.contains("$COMMONPROGRAMDATA\\Varmlen"));
+    assert!(postinstall.contains("SetSecurityDescriptorSddlForm"));
+    assert!(postinstall.contains("O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"));
+    assert!(!HOOKS.contains("$COMMONAPPDATA"));
     assert!(!HOOKS.contains("(OI)(CI)M"));
 }
 
@@ -31,4 +35,76 @@ fn uninstall_aborts_before_deleting_recovery_when_cleanup_fails() {
     assert!(uninstall.contains("ExecToStack"));
     assert!(uninstall.contains("--cleanup"));
     assert!(uninstall.contains("Abort"));
+}
+
+#[test]
+fn powershell_hooks_preserve_single_quoted_powershell_literals() {
+    let powershell_hooks = HOOKS
+        .lines()
+        .filter(|line| line.contains("powershell.exe"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(powershell_hooks.len(), 4);
+    for hook in powershell_hooks {
+        assert!(hook.contains(" `powershell.exe"));
+        assert!(hook.ends_with('`'));
+        assert!(!hook.contains("''"));
+    }
+}
+
+#[test]
+fn powershell_hooks_fit_nsis_string_limit() {
+    const NSIS_MAX_STRLEN: usize = 1024;
+
+    for hook in HOOKS.lines().filter(|line| line.contains("powershell.exe")) {
+        let expanded = hook
+            .replace("$$", "$")
+            .replace("$COMMONPROGRAMDATA", r"C:\ProgramData")
+            .replace("$INSTDIR", r"C:\Program Files\Varmlen");
+
+        assert!(
+            expanded.chars().count() < NSIS_MAX_STRLEN,
+            "PowerShell hook exceeds NSIS_MAX_STRLEN: {} characters",
+            expanded.chars().count()
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn embedded_powershell_scripts_parse_on_windows() {
+    const PARSE_COMMAND: &str = "$tokens = $null; $errors = $null; \
+        [void][System.Management.Automation.Language.Parser]::ParseInput(\
+            $env:VARMLEN_INSTALLER_SCRIPT, [ref]$tokens, [ref]$errors); \
+        if ($errors.Count -ne 0) { \
+            $errors | ForEach-Object { [Console]::Error.WriteLine($_.Message) }; \
+            exit 1 \
+        }";
+
+    for hook in HOOKS.lines().filter(|line| line.contains("powershell.exe")) {
+        let command_start = hook.find("-Command \"").expect("PowerShell command starts") + 10;
+        let command_end = hook.rfind("\"`").expect("PowerShell command ends");
+        let script = hook[command_start..command_end]
+            .replace("$COMMONPROGRAMDATA", r"C:\ProgramData")
+            .replace("$INSTDIR", r"C:\Program Files\Varmlen")
+            .replace("$$", "$");
+
+        let output = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                PARSE_COMMAND,
+            ])
+            .env("VARMLEN_INSTALLER_SCRIPT", script)
+            .output()
+            .expect("PowerShell parser starts");
+
+        assert!(
+            output.status.success(),
+            "embedded PowerShell failed parsing: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

@@ -1,5 +1,5 @@
 !macro VARMLEN_STOP_SERVICE
-  nsExec::ExecToLog 'powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$$service = Get-Service -Name VarmlenService -ErrorAction SilentlyContinue; if ($$service) { Stop-Service -Name VarmlenService -Force -ErrorAction SilentlyContinue; $$service.WaitForStatus(''Stopped'', ''00:00:15'') }"'
+  nsExec::ExecToLog `powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$$service = Get-Service -Name VarmlenService -ErrorAction SilentlyContinue; if ($$service) { Stop-Service -Name VarmlenService -Force -ErrorAction SilentlyContinue; $$service.WaitForStatus('Stopped', '00:00:15') }"`
 !macroend
 
 !macro VARMLEN_BACKUP_FILE NAME
@@ -47,14 +47,23 @@
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
-  CreateDirectory "$COMMONAPPDATA\Varmlen"
+  CreateDirectory "$COMMONPROGRAMDATA\Varmlen"
 
-  nsExec::ExecToStack 'powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$$interactive = (Get-CimInstance Win32_ComputerSystem).UserName; if ([string]::IsNullOrWhiteSpace($$interactive)) { throw ''No interactive user is signed in'' }; $$account = New-Object System.Security.Principal.NTAccount($$interactive); $$sid = $$account.Translate([System.Security.Principal.SecurityIdentifier]); [System.IO.File]::WriteAllText(''$COMMONAPPDATA\Varmlen\installed-user.sid'', $$sid.Value); $$acl = New-Object System.Security.AccessControl.DirectorySecurity; $$admins = New-Object System.Security.Principal.SecurityIdentifier(''S-1-5-32-544''); $$system = New-Object System.Security.Principal.SecurityIdentifier(''S-1-5-18''); $$acl.SetOwner($$admins); $$inherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit; $$propagation = [System.Security.AccessControl.PropagationFlags]::None; $$allow = [System.Security.AccessControl.AccessControlType]::Allow; $$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($$system, ''FullControl'', $$inherit, $$propagation, $$allow))); $$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($$admins, ''FullControl'', $$inherit, $$propagation, $$allow))); [System.IO.Directory]::SetAccessControl(''$COMMONAPPDATA\Varmlen'', $$acl)"'
+  nsExec::ExecToStack `powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$$acl = New-Object System.Security.AccessControl.DirectorySecurity; $$acl.SetSecurityDescriptorSddlForm('O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)'); [System.IO.Directory]::SetAccessControl('$COMMONPROGRAMDATA\Varmlen', $$acl)"`
   Pop $0
   Pop $1
   ${If} $0 != 0
     !insertmacro VARMLEN_ROLLBACK_SERVICE
     MessageBox MB_ICONSTOP "Varmlen could not initialize its protected service state directory.$\r$\n$1"
+    Abort
+  ${EndIf}
+
+  nsExec::ExecToStack `powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$$interactive = (Get-CimInstance Win32_ComputerSystem).UserName; if ([string]::IsNullOrWhiteSpace($$interactive)) { throw 'No interactive user is signed in' }; $$sid = (New-Object System.Security.Principal.NTAccount($$interactive)).Translate([System.Security.Principal.SecurityIdentifier]); [System.IO.File]::WriteAllText('$COMMONPROGRAMDATA\Varmlen\installed-user.sid', $$sid.Value)"`
+  Pop $0
+  Pop $1
+  ${If} $0 != 0
+    !insertmacro VARMLEN_ROLLBACK_SERVICE
+    MessageBox MB_ICONSTOP "Varmlen could not record the installing Windows account.$\r$\n$1"
     Abort
   ${EndIf}
 
@@ -82,7 +91,7 @@
     Abort
   ${EndIf}
 
-  nsExec::ExecToStack 'powershell.exe -NoLogo -NoProfile -NonInteractive -Command "for ($$attempt = 0; $$attempt -lt 20; $$attempt++) { & ''$INSTDIR\varmlen-service.exe'' --health; if ($$LASTEXITCODE -eq 0) { exit 0 }; Start-Sleep -Milliseconds 500 }; exit 1"'
+  nsExec::ExecToStack `powershell.exe -NoLogo -NoProfile -NonInteractive -Command "for ($$attempt = 0; $$attempt -lt 20; $$attempt++) { & '$INSTDIR\varmlen-service.exe' --health; if ($$LASTEXITCODE -eq 0) { exit 0 }; Start-Sleep -Milliseconds 500 }; exit 1"`
   Pop $0
   Pop $2
   ${If} $0 != 0
@@ -111,5 +120,5 @@
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
-  RMDir /r "$COMMONAPPDATA\Varmlen"
+  RMDir /r "$COMMONPROGRAMDATA\Varmlen"
 !macroend

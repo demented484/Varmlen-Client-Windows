@@ -120,10 +120,7 @@ impl WfpEngine {
 
     fn provider_filter_keys(&self) -> io::Result<Vec<GUID>> {
         let mut provider_key = GUID::from_u128(PROVIDER_KEY);
-        let template = FWPM_FILTER_ENUM_TEMPLATE0 {
-            providerKey: &mut provider_key,
-            ..Default::default()
-        };
+        let template = provider_filter_enum_template(&mut provider_key);
         let mut enum_handle = HANDLE::default();
         check(
             // SAFETY: template and output storage are valid.
@@ -212,6 +209,16 @@ impl WfpEngine {
 
     fn native(&self) -> HANDLE {
         HANDLE(self.handle as *mut c_void)
+    }
+}
+
+fn provider_filter_enum_template(provider_key: &mut GUID) -> FWPM_FILTER_ENUM_TEMPLATE0 {
+    FWPM_FILTER_ENUM_TEMPLATE0 {
+        providerKey: provider_key,
+        // A zero action mask can never match. WFP requires all bits set when
+        // the action type must not restrict enumeration.
+        actionMask: u32::MAX,
+        ..Default::default()
     }
 }
 
@@ -508,5 +515,19 @@ impl Drop for EnumHandle {
                 FwpmFilterDestroyEnumHandle0(self.engine, self.handle);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_filter_enumerator_accepts_every_action_type() {
+        let mut provider_key = GUID::from_u128(PROVIDER_KEY);
+        let template = provider_filter_enum_template(&mut provider_key);
+
+        assert_eq!(template.actionMask, u32::MAX);
+        assert_eq!(template.numFilterConditions, 0);
     }
 }
