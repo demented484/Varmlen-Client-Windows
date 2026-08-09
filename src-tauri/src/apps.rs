@@ -29,9 +29,11 @@ fn app_from_path(path: &Path, display_name: Option<&str>) -> Option<InstalledApp
         .file_stem()
         .and_then(|name| name.to_str())
         .unwrap_or("Application");
+    let metadata_name = executable_display_name(&path);
     let name = display_name
         .map(str::trim)
         .filter(|name| !name.is_empty())
+        .or(metadata_name.as_deref())
         .unwrap_or(fallback_name)
         .to_string();
     Some(InstalledApp {
@@ -115,10 +117,10 @@ fn collect_app_paths(applications: &mut std::collections::BTreeMap<String, Insta
                 let Ok(path) = key.get_value::<String, _>("") else {
                     continue;
                 };
-                insert_app(
-                    applications,
-                    app_from_path(Path::new(path.trim_matches('"')), None),
-                );
+                let path = Path::new(path.trim_matches('"'));
+                if !is_helper_executable(path) {
+                    insert_app(applications, app_from_path(path, None));
+                }
             }
         }
     }
@@ -152,7 +154,8 @@ fn collect_uninstall_entries(applications: &mut std::collections::BTreeMap<Strin
                 let display_icon = key
                     .get_value::<String, _>("DisplayIcon")
                     .ok()
-                    .and_then(|value| executable_from_display_icon(&value));
+                    .and_then(|value| executable_from_display_icon(&value))
+                    .filter(|path| !is_helper_executable(path));
                 let install_location = key
                     .get_value::<String, _>("InstallLocation")
                     .ok()
@@ -427,6 +430,109 @@ fn normalized_name(value: &str) -> String {
         .chars()
         .filter(|character| character.is_ascii_alphanumeric())
         .flat_map(char::to_lowercase)
+        .collect()
+}
+
+#[cfg(windows)]
+fn executable_display_name(path: &Path) -> Option<String> {
+    use std::{ffi::c_void, os::windows::ffi::OsStrExt};
+    use windows::{
+        core::PCWSTR,
+        Win32::Storage::FileSystem::{
+            GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+        },
+    };
+
+    let path = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let size = unsafe { GetFileVersionInfoSizeW(PCWSTR(path.as_ptr()), None) };
+    if size == 0 || size > 16 * 1024 * 1024 {
+        return None;
+    }
+    // usize storage provides sufficient alignment for pointers returned into
+    // the version block by VerQueryValueW.
+    let mut storage = vec![0usize; (size as usize).div_ceil(std::mem::size_of::<usize>())];
+    unsafe {
+        GetFileVersionInfoW(
+            PCWSTR(path.as_ptr()),
+            None,
+            size,
+            storage.as_mut_ptr().cast::<c_void>(),
+        )
+        .ok()?;
+    }
+
+    let block = storage.as_ptr().cast::<c_void>();
+    let mut translations = Vec::<(u16, u16)>::new();
+    let translation_query = wide_null(r"\VarFileInfo\Translation");
+    let mut translation_ptr = std::ptr::null_mut::<c_void>();
+    let mut translation_bytes = 0u32;
+    if unsafe {
+        VerQueryValueW(
+            block,
+            PCWSTR(translation_query.as_ptr()),
+            &mut translation_ptr,
+            &mut translation_bytes,
+        )
+        .as_bool()
+    } && !translation_ptr.is_null()
+        && translation_bytes >= 4
+    {
+        let words = unsafe {
+            std::slice::from_raw_parts(
+                translation_ptr.cast::<u16>(),
+                translation_bytes as usize / 2,
+            )
+        };
+        translations.extend(words.chunks_exact(2).map(|pair| (pair[0], pair[1])));
+    }
+    if translations.is_empty() {
+        translations.push((0x0409, 0x04b0));
+    }
+
+    for key in ["ProductName", "FileDescription"] {
+        for (language, codepage) in &translations {
+            let query = wide_null(&format!(
+                r"\StringFileInfo\{language:04x}{codepage:04x}\{key}"
+            ));
+            let mut value_ptr = std::ptr::null_mut::<c_void>();
+            let mut value_chars = 0u32;
+            let found = unsafe {
+                VerQueryValueW(
+                    block,
+                    PCWSTR(query.as_ptr()),
+                    &mut value_ptr,
+                    &mut value_chars,
+                )
+                .as_bool()
+            };
+            if !found || value_ptr.is_null() || value_chars == 0 || value_chars > 512 {
+                continue;
+            }
+            let value = String::from_utf16_lossy(unsafe {
+                std::slice::from_raw_parts(value_ptr.cast::<u16>(), value_chars as usize)
+            });
+            let value = value.trim_matches('\0').trim();
+            if !value.is_empty()
+                && value.len() <= 160
+                && !value.chars().any(|character| character.is_control())
+            {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn wide_null(value: &str) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    std::ffi::OsStr::new(value)
+        .encode_wide()
+        .chain(std::iter::once(0))
         .collect()
 }
 

@@ -6,6 +6,7 @@ pub const BUNDLED_XRAY_VERSION: &str = "26.6.27";
 pub struct InstalledVersion {
     pub tag: String,
     pub active: bool,
+    pub bundled: bool,
 }
 
 #[derive(Serialize)]
@@ -39,6 +40,7 @@ pub async fn core_info(kind: String) -> Result<CoreInfo, String> {
         installed: vec![InstalledVersion {
             tag: BUNDLED_XRAY_VERSION.into(),
             active: true,
+            bundled: true,
         }],
         active: Some(BUNDLED_XRAY_VERSION.into()),
         // The privileged service deliberately runs the installer-pinned core.

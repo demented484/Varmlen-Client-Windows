@@ -17,6 +17,18 @@ describe("Windows split-tunnel application discovery", () => {
     expect(apps).toContain('get_value::<String, _>("InstallLocation")');
   });
 
+  it("uses executable metadata for truthful names and rejects discovered uninstall helpers", () => {
+    const apps = read("../../src-tauri/src/apps.rs");
+
+    expect(apps).toContain("GetFileVersionInfoW");
+    expect(apps).toContain("VerQueryValueW");
+    expect(apps).toContain('["ProductName", "FileDescription"]');
+    expect(apps).toContain("if !is_helper_executable(path)");
+    expect(apps).toContain(".filter(|path| !is_helper_executable(path))");
+    // Manual file selection still deliberately accepts any real .exe.
+    expect(apps).toContain("app_from_path(Path::new(&path), None)");
+  });
+
   it("discovers exact Xbox game executables and extracts executable or package icons", () => {
     const apps = read("../../src-tauri/src/apps.rs");
     const split = read("../routes/split/+page.svelte");

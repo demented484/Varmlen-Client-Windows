@@ -126,6 +126,8 @@ export interface InstalledVersion {
   tag: string;
   /** True iff this is the currently active version. */
   active: boolean;
+  /** Shipped with the installed Varmlen service. */
+  bundled: boolean;
 }
 
 export interface CoreInfo {

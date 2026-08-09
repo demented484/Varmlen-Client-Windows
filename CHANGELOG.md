@@ -2,6 +2,10 @@
 
 ## 0.3.0 Preview
 
+- Mark the installer-bundled Xray version explicitly in the core menu and keep
+  it visible as the immutable service-owned core.
+- Filter uninstall/setup helpers from automatic app discovery and derive names
+  such as Chromium from executable version metadata instead of `chrome.exe`.
 - Pin native-TUN outbound sockets to the physical interface selected by the
   Windows route table, avoiding DNS/Reality loops through Hyper-V or WSL NICs.
 - Discover XboxGames installations, avoid installer/cleaner executables when
