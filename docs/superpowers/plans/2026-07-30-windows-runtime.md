@@ -12,7 +12,7 @@ state and transactional WFP objects. Tauri sends the existing bounded protocol
 over the named pipe; NSIS installs all privileged runtime files.
 
 **Tech Stack:** Rust 2021, Tokio, windows-rs, Windows Filtering Platform,
-Windows IP Helper, DPAPI, Xray 26.6.27, Wintun 0.14.1, Tauri 2 and NSIS.
+Windows IP Helper, DPAPI, Xray 26.3.27, Wintun 0.14.1, Tauri 2 and NSIS.
 
 ## Global Constraints
 
@@ -144,7 +144,7 @@ Windows IP Helper, DPAPI, Xray 26.6.27, Wintun 0.14.1, Tauri 2 and NSIS.
   GUI, service, Xray, Wintun and geodata.
 
 - [ ] Add package-manifest tests before installer configuration.
-- [ ] Pin Xray 26.6.27 and Wintun 0.14.1 with published SHA-256 values.
+- [ ] Pin Xray 26.3.27 and Wintun 0.14.1 with published SHA-256 values.
 - [ ] Add per-machine install, upgrade and cleanup hooks.
 - [ ] Build x64 and ARM64 executables and NSIS installers locally.
 - [ ] Inspect PE architectures and package contents.

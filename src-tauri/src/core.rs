@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-pub const BUNDLED_XRAY_VERSION: &str = "26.6.27";
+pub const BUNDLED_XRAY_VERSION: &str = "26.3.27";
 
 #[derive(Serialize, Clone)]
 pub struct InstalledVersion {

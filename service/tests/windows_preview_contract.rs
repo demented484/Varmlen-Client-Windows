@@ -4,6 +4,7 @@ const SETTINGS_PAGE: &str = include_str!("../../src/routes/settings/+page.svelte
 const WFP: &str = include_str!("../src/windows_wfp.rs");
 const PIPE: &str = include_str!("../src/pipe.rs");
 const ADAPTER: &str = include_str!("../src/windows_adapter.rs");
+const ROUTES: &str = include_str!("../src/windows_routes.rs");
 
 #[test]
 fn preview_connection_does_not_depend_on_user_mode_wfp_filters() {
@@ -25,6 +26,13 @@ fn native_tun_is_pinned_to_windows_route_and_split_selectors_stay_exact() {
     assert!(BACKEND.contains("best_outbound_interface_name"));
     assert!(BACKEND.contains("rewrite_native_outbound_interface"));
     assert!(ADAPTER.contains("GetBestInterfaceEx"));
+    assert!(BACKEND.contains("configure_stable_tun_network"));
+    assert!(ROUTES.contains("0.0.0.0/1"));
+    assert!(ROUTES.contains("128.0.0.0/1"));
+    assert!(ROUTES.contains("::/1"));
+    assert!(ROUTES.contains("8000::/1"));
+    assert!(ROUTES.contains("store=active"));
+    assert!(!ROUTES.contains("powershell"));
     assert!(VPN_BRIDGE.contains("if !canonical.is_file()"));
     assert!(!VPN_BRIDGE.contains("canonical_path.push('\\\\')"));
 }

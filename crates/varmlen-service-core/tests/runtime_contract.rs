@@ -55,12 +55,17 @@ fn native_tun_requires_dual_stack_routes_and_explicit_dns() {
 }
 
 #[test]
-fn service_pins_native_tun_to_the_windows_selected_physical_interface() {
+fn service_adapts_native_tun_to_stable_xray_and_pins_outbound_sockets() {
     let rewritten = rewrite_native_outbound_interface(&native_config(), "Wi-Fi")
         .expect("service-selected physical interface");
     let value: serde_json::Value = serde_json::from_str(&rewritten).unwrap();
+    let settings = &value["inbounds"][0]["settings"];
+    assert!(settings.get("gateway").is_none());
+    assert!(settings.get("dns").is_none());
+    assert!(settings.get("autoSystemRoutingTable").is_none());
+    assert!(settings.get("autoOutboundsInterface").is_none());
     assert_eq!(
-        value["inbounds"][0]["settings"]["autoOutboundsInterface"],
+        value["outbounds"][0]["streamSettings"]["sockopt"]["interface"],
         "Wi-Fi"
     );
     assert!(rewrite_native_outbound_interface(&native_config(), "").is_err());

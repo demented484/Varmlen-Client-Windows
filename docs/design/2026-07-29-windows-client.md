@@ -80,16 +80,16 @@ the privileged service never fetches arbitrary user-supplied subscription URLs.
 
 ## 4. Native TUN data plane
 
-The service launches the bundled, pinned Xray binary with a native `tun`
-inbound. The configuration includes:
+The service launches stable, pinned Xray 26.3.27 with a native `tun` inbound.
+That release owns the Wintun packet session but predates Xray's automatic
+Windows network configuration, so the service:
 
-- deterministic adapter name owned by Varmlen;
-- IPv4 and IPv6 gateways;
-- MTU appropriate for the selected configuration;
-- `autoSystemRoutingTable` for `0.0.0.0/0` and `::/0`;
-- `autoOutboundsInterface: "auto"`;
-- DNS addresses assigned to the TUN adapter;
-- explicit proxy, direct, blocked and DNS outbound tags.
+- uses the deterministic `Varmlen` adapter name;
+- assigns the IPv4 and IPv6 addresses and DNS servers;
+- installs active-store split-default IPv4 and IPv6 routes;
+- binds every network-capable Xray outbound to the physical interface selected
+  by Windows before those routes exist;
+- keeps explicit proxy, direct, blocked and DNS outbound tags.
 
 Xray uses Wintun directly. The installer bundles the Wintun DLL matching the
 package architecture. The service discovers its own architecture at build and

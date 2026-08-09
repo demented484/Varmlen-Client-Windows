@@ -18,6 +18,7 @@ use crate::{
     state_record::DesiredStateRecord,
     windows_adapter::{best_outbound_interface_name, find_varmlen_adapter, AdapterInfo},
     windows_process::{prepare_native_config, validate_config, ManagedXray, PreparedXrayConfig},
+    windows_routes::configure_stable_tun_network,
     windows_state::{ensure_state_directory, persist_desired_state, runtime_layout},
     windows_wfp::cleanup_persistent_policy,
 };
@@ -70,7 +71,8 @@ impl WindowsBackend {
     }
 
     async fn wait_for_candidate(&mut self) -> io::Result<AdapterInfo> {
-        for _ in 0..60 {
+        let mut network_configured = false;
+        for _ in 0..100 {
             let running = self
                 .active
                 .as_mut()
@@ -80,6 +82,10 @@ impl WindowsBackend {
                 return Err(io::Error::other("Xray exited during startup"));
             }
             if let Some(adapter) = find_varmlen_adapter()? {
+                if !network_configured {
+                    configure_stable_tun_network()?;
+                    network_configured = true;
+                }
                 if adapter.has_ipv4 && adapter.has_ipv6 && adapter.dns_count > 0 {
                     return Ok(adapter);
                 }
@@ -164,9 +170,9 @@ impl ConnectionBackend for WindowsBackend {
             .map_err(|error| service_error(ServiceErrorCode::ValidationFailed, error))?;
 
         // Resolve the endpoint's actual Windows route while the candidate TUN
-        // is still down, then pin Xray to that adapter. This avoids the native
-        // TUN's name/address heuristic choosing Hyper-V, WSL, or another
-        // virtual interface and looping its own Reality/DoH traffic.
+        // is still down, then bind Xray's network-capable outbound sockets to
+        // that adapter. This keeps the stable core's traffic off Hyper-V, WSL,
+        // and the Varmlen routes installed by the service.
         let interface = match self.active_interface.clone() {
             // Candidate validation intentionally happens before the old tunnel
             // is stopped. Its default route would make GetBestInterfaceEx point

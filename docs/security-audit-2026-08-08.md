@@ -68,9 +68,11 @@ needed.
 The runtime monitor checks only whether the Xray process is alive. It does not
 subscribe to default-route, adapter, DNS, power-resume, or network-profile
 changes. After a real Windows DNS-timeout failure, startup was hardened to ask
-Windows' route table for the VPN endpoint's physical interface and pin Xray to
-that exact adapter instead of relying on Xray's name/address heuristic. That
-fixes initial selection around Hyper-V/WSL adapters, but the choice can still
+Windows' route table for the VPN endpoint's physical interface and bind stable
+Xray 26.3.27's proxy/direct sockets to that exact adapter. The service owns the
+TUN addresses, DNS and active-store routes that this stable Xray release does
+not configure itself. That fixes initial selection around Hyper-V/WSL adapters,
+but the choice can still
 become stale when a machine moves between Wi-Fi, Ethernet, docking, or
 sleep/resume.
 

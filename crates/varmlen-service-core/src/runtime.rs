@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 pub const LOOPBACK_FILTER_WEIGHT: u64 = 0xff;
 pub const DNS_FILTER_WEIGHT: u64 = 0xfe;
@@ -140,10 +140,11 @@ pub fn inspect_native_tun_config(config: &str) -> Result<NativeTunInspection, St
     })
 }
 
-/// Pin a previously validated native TUN config to the physical interface that
-/// Windows selected for the VPN endpoint before the TUN default route exists.
-/// This avoids Xray's heuristic `"auto"` choice selecting an unrelated virtual
-/// adapter on machines with Hyper-V, WSL, or multiple game/VPN adapters.
+/// Adapt the portable native-TUN intent to the stable bundled Xray runtime.
+/// Xray 26.3.27 predates automatic Windows address/route configuration, so the
+/// service owns that policy and strips those newer ignored settings. Every
+/// network-capable outbound is instead bound to the physical interface selected
+/// by Windows before the TUN routes exist.
 pub fn rewrite_native_outbound_interface(
     config: &str,
     interface_name: &str,
@@ -171,10 +172,46 @@ pub fn rewrite_native_outbound_interface(
         .get_mut("settings")
         .and_then(Value::as_object_mut)
         .ok_or_else(|| "TUN inbound has no settings object".to_string())?;
-    settings.insert(
-        "autoOutboundsInterface".into(),
-        Value::String(interface_name.to_string()),
-    );
+    for field in [
+        "desc",
+        "gateway",
+        "dns",
+        "autoSystemRoutingTable",
+        "autoOutboundsInterface",
+    ] {
+        settings.remove(field);
+    }
+
+    let outbounds = root
+        .get_mut("outbounds")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| "native Xray config has no outbounds array".to_string())?;
+    for outbound in outbounds {
+        if matches!(
+            outbound.get("protocol").and_then(Value::as_str),
+            Some("blackhole" | "dns")
+        ) {
+            continue;
+        }
+        let outbound = outbound
+            .as_object_mut()
+            .ok_or_else(|| "native Xray outbound is not an object".to_string())?;
+        let stream = outbound
+            .entry("streamSettings")
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+            .ok_or_else(|| "native Xray streamSettings is not an object".to_string())?;
+        let sockopt = stream
+            .entry("sockopt")
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+            .ok_or_else(|| "native Xray sockopt is not an object".to_string())?;
+        sockopt.insert(
+            "interface".into(),
+            Value::String(interface_name.to_string()),
+        );
+    }
+
     serde_json::to_string_pretty(&Value::Object(root))
         .map_err(|error| format!("could not serialize native Xray config: {error}"))
 }

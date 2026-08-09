@@ -61,7 +61,7 @@ See [the architecture](docs/design/2026-07-29-windows-client.md) and the
 
 ## Local build
 
-The build scripts download pinned Xray 26.6.27 and Wintun 0.14.1 archives,
+The build scripts download pinned Xray 26.3.27 and Wintun 0.14.1 archives,
 verify their SHA-256 hashes, cross-compile the service and GUI, and create a
 per-machine NSIS installer:
 

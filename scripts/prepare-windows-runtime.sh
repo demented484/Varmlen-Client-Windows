@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-XRAY_VERSION="26.6.27"
+XRAY_VERSION="26.3.27"
 WINTUN_VERSION="0.14.1"
 WINTUN_SHA256="07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51"
 
 case "${1:-}" in
   x64)
     XRAY_ARCHIVE="Xray-windows-64.zip"
-    XRAY_SHA256="97f16a0701dbf931c9c4375399f8188e31615fdd5c863be5c612f946acd4dd01"
+    XRAY_SHA256="d004c39288ce9ada487c6f398c7c545f7d749e44bdfdd59dbc9f865afba4e1ad"
     WINTUN_ARCH="amd64"
     ;;
   arm64)
     XRAY_ARCHIVE="Xray-windows-arm64-v8a.zip"
-    XRAY_SHA256="e9dbd1b54ebcd272691fc67535297315eda642905cf5a5076b495d857c480ecb"
+    XRAY_SHA256="35d4ed6ec21224fb22b07c2c3f672e2350cd536f2c74d309150175a76365ea88"
     WINTUN_ARCH="arm64"
     ;;
   *)

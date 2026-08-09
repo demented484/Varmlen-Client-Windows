@@ -2,8 +2,8 @@
 
 ## 0.3.0 Preview
 
-- Mark the installer-bundled Xray version explicitly in the core menu and keep
-  it visible as the immutable service-owned core.
+- Pin the service-owned core to stable Xray 26.3.27, mark it explicitly in the
+  core menu, and configure Windows TUN addresses, DNS and routes in the service.
 - Filter uninstall/setup helpers from automatic app discovery and derive names
   such as Chromium from executable version metadata instead of `chrome.exe`.
 - Pin native-TUN outbound sockets to the physical interface selected by the

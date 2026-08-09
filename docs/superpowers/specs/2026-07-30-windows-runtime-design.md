@@ -45,14 +45,14 @@ only to `SYSTEM` and administrators.
 ## Xray lifecycle
 
 The GUI sends a native-TUN config, a loopback-SOCKS validation config, resolved
-server endpoints, split selectors and policy flags. The service validates both
-JSON documents and enforces these native-TUN settings:
+server endpoints, split selectors and policy flags. The service validates that
+portable intent, then adapts it for stable Xray 26.3.27:
 
-- name and description `Varmlen`;
-- gateway `10.255.0.1/30` and `fd00:7661:726d:6c65::1/64`;
-- DNS `1.1.1.1`;
-- automatic routes `0.0.0.0/0` and `::/0`;
-- `autoOutboundsInterface: "auto"`.
+- Xray receives only the supported TUN name and MTU;
+- the service assigns `10.255.0.1/30`, `fd00:7661:726d:6c65::1/64` and DNS;
+- the service installs active-store split-default IPv4/IPv6 routes;
+- Xray proxy/direct socket options are bound to the Windows-selected physical
+  interface.
 
 Before touching an active tunnel, the service runs `xray run -test` and starts
 the validation config long enough to complete a bounded SOCKS5 connection.

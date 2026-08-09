@@ -16,6 +16,8 @@ pub mod windows_backend;
 #[cfg(windows)]
 pub mod windows_process;
 #[cfg(windows)]
+pub mod windows_routes;
+#[cfg(windows)]
 pub mod windows_service;
 #[cfg(windows)]
 pub mod windows_state;
