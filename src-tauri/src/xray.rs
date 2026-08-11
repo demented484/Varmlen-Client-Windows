@@ -1049,57 +1049,47 @@ pub fn build_xray_config(
     config
 }
 
-/// Number of concrete proxy paths represented by one UI location. Composite
-/// JSON profiles can contain several outbounds behind a provider balancer.
-pub fn ping_proxy_count(server: &VlessServer) -> Result<usize, String> {
-    Ok(outbound_plan(server)?.proxies.len())
-}
+const CONNECTION_PROBE_PORT: u16 = 20_810;
 
-/// Minimal per-location latency configuration. Each concrete proxy gets its own
-/// loopback SOCKS inbound, so callers can probe all variants concurrently and
-/// report the fastest healthy path. Keeping the provider observatory out avoids
-/// waiting for its cold multi-sample schedule on every manual ping.
-pub fn build_ping_config(server: &VlessServer, socks_ports: &[u16]) -> Result<Value, String> {
+/// Device-free connection preflight. Its single loopback SOCKS inbound follows
+/// the profile's effective target — either the selected outbound or its
+/// balancer. Optional, fallback, and chained outbounds are not independently
+/// mandatory. The service replaces the placeholder with a port it reserves,
+/// then requires the effective route to complete a SOCKS5 CONNECT request.
+pub fn build_connection_probe_config(server: &VlessServer) -> Result<Value, String> {
     let mut plan = outbound_plan(server)?;
-    if socks_ports.len() != plan.proxies.len() {
-        return Err(format!(
-            "ping config needs {} SOCKS ports, got {}",
-            plan.proxies.len(),
-            socks_ports.len()
-        ));
-    }
-
-    let mut inbounds = Vec::with_capacity(socks_ports.len());
-    let mut rules = Vec::with_capacity(socks_ports.len());
-    for (index, (proxy, port)) in plan.proxies.iter().zip(socks_ports).enumerate() {
-        let proxy_tag = proxy
-            .get("tag")
-            .and_then(Value::as_str)
-            .ok_or_else(|| format!("ping proxy {index} has no tag"))?;
-        let inbound_tag = format!("socks-in-{index}");
-        inbounds.push(json!({
-            "tag": inbound_tag,
-            "listen": "127.0.0.1",
-            "port": port,
-            "protocol": "socks",
-            "settings": { "udp": false, "auth": "noauth" }
-        }));
-        rules.push(json!({
-            "type": "field",
-            "inboundTag": [inbound_tag],
-            "network": "tcp,udp",
-            "outboundTag": proxy_tag
-        }));
-    }
+    let mut route = json!({
+        "type": "field",
+        "inboundTag": ["socks-in-0"],
+        "network": "tcp,udp"
+    });
+    plan.target.apply(&mut route);
 
     let mut proxies = std::mem::take(&mut plan.proxies);
     proxies.push(json!({ "tag": "direct", "protocol": "freedom" }));
-    Ok(json!({
+    let mut routing = json!({ "rules": [route] });
+    if let Some(balancers) = plan.balancers {
+        routing["balancers"] = balancers;
+    }
+    let mut config = json!({
         "log": { "loglevel": "warning" },
-        "inbounds": inbounds,
+        "inbounds": [{
+            "tag": "socks-in-0",
+            "listen": "127.0.0.1",
+            "port": CONNECTION_PROBE_PORT,
+            "protocol": "socks",
+            "settings": { "udp": false, "auth": "noauth" }
+        }],
         "outbounds": proxies,
-        "routing": { "rules": rules }
-    }))
+        "routing": routing
+    });
+    if let Some(observatory) = plan.observatory {
+        config["observatory"] = observatory;
+    }
+    if let Some(burst_observatory) = plan.burst_observatory {
+        config["burstObservatory"] = burst_observatory;
+    }
+    Ok(config)
 }
 
 #[cfg(test)]
@@ -1562,46 +1552,22 @@ mod tests {
     }
 
     #[test]
-    fn ping_config_uses_requested_loopback_port_without_linux_marks() {
-        let s =
-            parse_proxy_uri("vless://u@1.2.3.4:443?type=xhttp&security=reality&pbk=K#X").unwrap();
-        let cfg = build_ping_config(&s, &[32_000]).unwrap();
-        assert_eq!(cfg["inbounds"][0]["listen"], "127.0.0.1");
-        assert_eq!(cfg["inbounds"][0]["port"], 32_000);
-        assert_eq!(cfg["outbounds"].as_array().unwrap().len(), 2);
-        assert!(cfg["outbounds"][0]["streamSettings"]["sockopt"]
-            .get("mark")
-            .is_none());
-        assert_eq!(cfg["routing"]["rules"][0]["outboundTag"], "proxy");
-    }
-
-    #[test]
-    fn composite_ping_probes_every_proxy_without_starting_health_checks() {
+    fn connection_probe_checks_composite_effective_route_once() {
         let server = estonia_profile_server();
-        let ports = (32_000..32_007).collect::<Vec<_>>();
-        let cfg = build_ping_config(&server, &ports).unwrap();
-
-        assert_eq!(cfg["inbounds"].as_array().unwrap().len(), 7);
-        assert_eq!(cfg["routing"]["rules"].as_array().unwrap().len(), 7);
-        assert_eq!(cfg["routing"]["rules"][0]["outboundTag"], "proxy");
-        assert_eq!(cfg["routing"]["rules"][1]["outboundTag"], "proxy-2");
-        assert_eq!(cfg["routing"]["rules"][6]["outboundTag"], "proxy-7");
-        assert!(cfg["routing"].get("balancers").is_none());
-        assert!(cfg.get("observatory").is_none());
-        assert!(cfg.get("burstObservatory").is_none());
-        varmlen_service_core::runtime::inspect_validation_config(
-            &serde_json::to_string(&cfg).unwrap(),
+        let config = build_connection_probe_config(&server).unwrap();
+        let inspection = varmlen_service_core::runtime::inspect_validation_config(
+            &serde_json::to_string(&config).unwrap(),
         )
         .unwrap();
-    }
 
-    #[test]
-    fn composite_ping_requires_one_port_per_proxy() {
-        let server = estonia_profile_server();
-
-        assert!(build_ping_config(&server, &[32_000])
-            .unwrap_err()
-            .contains("7 SOCKS ports"));
+        assert_eq!(inspection.socks_ports, [CONNECTION_PROBE_PORT]);
+        assert_eq!(config["routing"]["rules"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            config["routing"]["rules"][0]["balancerTag"],
+            "estonia-balancer"
+        );
+        assert!(config["routing"]["rules"][0].get("outboundTag").is_none());
+        assert!(config.get("burstObservatory").is_some());
     }
 
     #[test]

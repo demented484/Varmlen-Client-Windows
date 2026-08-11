@@ -12,7 +12,7 @@ use crate::{
     service_client,
     split::SplitInput,
     subscription::{server_endpoints, VlessServer},
-    xray::{build_ping_config, build_xray_config, ping_proxy_count, validate_server},
+    xray::{build_connection_probe_config, build_xray_config, validate_server},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,11 +72,8 @@ pub async fn vpn_connect(
         serde_json::to_string_pretty(&build_xray_config(&server, &split, allow_lan, &level))
             .map_err(|error| format!("serialize Xray config: {error}"))?;
 
-    let proxy_count = ping_proxy_count(&server)?;
-    let validation_ports = validation_placeholder_ports(proxy_count)?;
-    let validation_config =
-        serde_json::to_string_pretty(&build_ping_config(&server, &validation_ports)?)
-            .map_err(|error| format!("serialize Xray validation config: {error}"))?;
+    let validation_config = serde_json::to_string_pretty(&build_connection_probe_config(&server)?)
+        .map_err(|error| format!("serialize Xray validation config: {error}"))?;
     let endpoints = resolve_server_endpoints(&server).await?;
 
     let state = service_client::connect(ConnectRequest {
@@ -225,13 +222,6 @@ async fn resolve_server_endpoints(
         ));
     }
     Ok(endpoints.into_iter().collect())
-}
-
-fn validation_placeholder_ports(count: usize) -> Result<Vec<u16>, String> {
-    if !(1..=64).contains(&count) {
-        return Err(format!("invalid validation path count: {count}"));
-    }
-    Ok((0..count).map(|index| 20_810 + index as u16).collect())
 }
 
 pub(crate) fn teardown_on_exit(_app: &tauri::AppHandle) {

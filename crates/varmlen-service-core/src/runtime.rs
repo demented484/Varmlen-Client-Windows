@@ -220,7 +220,15 @@ pub fn inspect_validation_config(config: &str) -> Result<ValidationInspection, S
     let root = parse_object(config, "validation Xray config")?;
     reject_unknown_top_level_fields(
         &root,
-        &["log", "dns", "inbounds", "outbounds", "routing"],
+        &[
+            "log",
+            "dns",
+            "inbounds",
+            "outbounds",
+            "routing",
+            "observatory",
+            "burstObservatory",
+        ],
         "validation Xray config",
     )?;
     reject_log_file_paths(&root, "validation Xray config")?;
@@ -257,11 +265,10 @@ pub fn inspect_validation_config(config: &str) -> Result<ValidationInspection, S
                 .ok_or_else(|| "validation SOCKS inbound has an invalid port".to_string())
         })
         .collect::<Result<Vec<_>, _>>()?;
-    if socks_ports.is_empty() {
-        return Err("validation Xray config has no SOCKS inbound".into());
-    }
-    if socks_ports.iter().copied().collect::<HashSet<_>>().len() != socks_ports.len() {
-        return Err("validation SOCKS inbound ports must be unique".into());
+    if socks_ports.len() != 1 {
+        return Err(
+            "validation Xray config must contain exactly one effective-route SOCKS inbound".into(),
+        );
     }
 
     Ok(ValidationInspection { socks_ports })

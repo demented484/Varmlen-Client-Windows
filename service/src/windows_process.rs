@@ -10,7 +10,6 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
     process::{Child, Command},
-    task::JoinSet,
     time::{sleep, timeout, Instant},
 };
 use varmlen_service_core::runtime::{
@@ -34,8 +33,8 @@ use windows::{
 use crate::{
     log_store::rotate_if_needed,
     process_plan::{
-        failed_proxy_paths, socks5_ipv4_connect_request, validate_socks5_connect_header,
-        validate_socks5_method_reply, XrayConfigTransaction, XrayInvocation,
+        socks5_ipv4_connect_request, validate_socks5_connect_header, validate_socks5_method_reply,
+        XrayConfigTransaction, XrayInvocation,
     },
     windows_state::{atomic_write, ensure_state_directory},
 };
@@ -246,57 +245,32 @@ async fn validate_config_syntax(
 }
 
 async fn wait_for_socks_reachability(child: &mut Child, ports: &[u16]) -> io::Result<()> {
+    let [port] = ports else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "validation requires exactly one effective-route SOCKS port",
+        ));
+    };
     let deadline = Instant::now() + Duration::from_secs(10);
-    let mut last_error = "validation proxy did not accept a connection".to_string();
+    let mut last_error = "effective route did not accept a connection".to_string();
 
     loop {
         if let Some(status) = child.try_wait()? {
             return Err(io::Error::other(format!(
-                "validation Xray exited before a proxy path became reachable: {status}"
+                "validation Xray exited before the effective route became reachable: {status}"
             )));
         }
 
-        let mut probes = JoinSet::new();
-        for port in ports.iter().copied() {
-            probes.spawn(async move {
-                let result = timeout(Duration::from_secs(3), probe_socks5(port))
-                    .await
-                    .map_err(|_| {
-                        io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            format!("SOCKS5 validation timed out on port {port}"),
-                        )
-                    })?;
-                result.map(|()| port)
-            });
+        match timeout(Duration::from_secs(3), probe_socks5(*port)).await {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(error)) => last_error = error.to_string(),
+            Err(_) => last_error = format!("SOCKS5 validation timed out on port {port}"),
         }
-        let mut results = Vec::with_capacity(ports.len());
-        while let Some(result) = probes.join_next().await {
-            match result {
-                Ok(Ok(port)) => results.push((port, true)),
-                Ok(Err(error)) => {
-                    last_error = error.to_string();
-                }
-                Err(error) => {
-                    last_error = format!("SOCKS5 validation task failed: {error}");
-                }
-            }
-        }
-        for port in ports {
-            if !results.iter().any(|(completed, _)| completed == port) {
-                results.push((*port, false));
-            }
-        }
-        let failed = failed_proxy_paths(&results);
-        if failed.is_empty() {
-            return Ok(());
-        }
-        last_error = format!("proxy paths on ports {failed:?} failed; last error: {last_error}");
 
         if Instant::now() >= deadline {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
-                format!("no validation proxy path became reachable: {last_error}"),
+                format!("effective route is unreachable: {last_error}"),
             ));
         }
         sleep(Duration::from_millis(100)).await;

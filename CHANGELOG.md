@@ -1,7 +1,10 @@
 # Changelog
 
-## 0.3.0 Preview
+## 0.3.0
 
+- Verify the selected profile's effective route before switching traffic;
+  optional, fallback, balancer, and chained outbounds no longer make an
+  otherwise working connection fail.
 - Pin the service-owned core to stable Xray 26.3.27, mark it explicitly in the
   core menu, and configure Windows TUN addresses, DNS and routes in the service.
 - Filter uninstall/setup helpers from automatic app discovery and derive names

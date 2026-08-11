@@ -5,8 +5,8 @@ use varmlen_protocol::{
 };
 use varmlen_service::{
     process_plan::{
-        failed_proxy_paths, socks5_ipv4_connect_request, validate_socks5_connect_header,
-        validate_socks5_method_reply, XrayConfigTransaction, XrayInvocation, XrayInvocationKind,
+        socks5_ipv4_connect_request, validate_socks5_connect_header, validate_socks5_method_reply,
+        XrayConfigTransaction, XrayInvocation, XrayInvocationKind,
     },
     state_record::{
         decode_desired_state, encode_desired_state, DesiredStatePhase, DesiredStateRecord,
@@ -45,15 +45,6 @@ fn validation_probe_uses_a_no_auth_socks5_connect_request() {
         18
     );
     assert!(validate_socks5_connect_header([5, 4, 0, 1]).is_err());
-}
-
-#[test]
-fn composite_validation_requires_every_proxy_path() {
-    assert!(failed_proxy_paths(&[(2081, true), (2082, true)]).is_empty());
-    assert_eq!(
-        failed_proxy_paths(&[(2081, true), (2082, false), (2083, false)]),
-        vec![2082, 2083]
-    );
 }
 
 #[test]

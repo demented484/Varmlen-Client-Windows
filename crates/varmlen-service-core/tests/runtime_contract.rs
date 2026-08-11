@@ -78,29 +78,23 @@ fn service_adapts_native_tun_to_stable_xray_and_pins_outbound_sockets() {
 #[test]
 fn validation_config_must_only_listen_on_loopback_and_must_not_create_tun() {
     let valid = json!({
-        "inbounds": [
-            {
-                "tag": "validation-1",
-                "listen": "127.0.0.1",
-                "port": 2081,
-                "protocol": "socks"
-            },
-            {
-                "tag": "validation-2",
-                "listen": "::1",
-                "port": 2082,
-                "protocol": "socks"
-            }
-        ]
+        "inbounds": [{
+            "tag": "validation",
+            "listen": "127.0.0.1",
+            "port": 2081,
+            "protocol": "socks"
+        }],
+        "observatory": {"subjectSelector": ["proxy"]},
+        "burstObservatory": {"subjectSelector": ["proxy"]}
     })
     .to_string();
     let inspected = inspect_validation_config(&valid).expect("loopback validation");
-    assert_eq!(inspected.socks_ports, vec![2081, 2082]);
+    assert_eq!(inspected.socks_ports, vec![2081]);
 
-    let rewritten = rewrite_validation_ports(&valid, &[32_001, 32_002])
-        .expect("service-owned validation ports");
+    let rewritten =
+        rewrite_validation_ports(&valid, &[32_001]).expect("service-owned validation port");
     let inspected = inspect_validation_config(&rewritten).expect("rewritten validation config");
-    assert_eq!(inspected.socks_ports, vec![32_001, 32_002]);
+    assert_eq!(inspected.socks_ports, vec![32_001]);
 
     let public_listener = valid.replace("127.0.0.1", "0.0.0.0");
     assert!(inspect_validation_config(&public_listener)
@@ -113,10 +107,19 @@ fn validation_config_must_only_listen_on_loopback_and_must_not_create_tun() {
     .to_string();
     assert!(inspect_validation_config(&tun).unwrap_err().contains("TUN"));
 
-    let duplicate_ports = valid.replace("2082", "2081");
-    assert!(inspect_validation_config(&duplicate_ports)
+    let mut multiple: serde_json::Value = serde_json::from_str(&valid).expect("fixture JSON");
+    multiple["inbounds"]
+        .as_array_mut()
+        .expect("inbounds")
+        .push(json!({
+            "tag": "optional-path",
+            "listen": "::1",
+            "port": 2082,
+            "protocol": "socks"
+        }));
+    assert!(inspect_validation_config(&multiple.to_string())
         .unwrap_err()
-        .contains("unique"));
+        .contains("exactly one effective-route"));
 
     let missing_listen = valid.replace(r#""listen":"127.0.0.1","#, "");
     assert!(inspect_validation_config(&missing_listen)
