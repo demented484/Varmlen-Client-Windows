@@ -136,7 +136,7 @@ fn forced_fail_open_state_is_truthful() {
 
 fn valid_connect() -> ConnectRequest {
     ConnectRequest {
-        xray_version: "26.3.27".into(),
+        xray_version: "26.7.28".into(),
         xray_config: r#"{"inbounds":[],"outbounds":[]}"#.into(),
         validation_config: r#"{"inbounds":[],"outbounds":[]}"#.into(),
         server_endpoints: vec![SocketAddr::from(([203, 0, 113, 7], 443))],

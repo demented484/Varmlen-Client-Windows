@@ -125,9 +125,9 @@ pub fn inspect_native_tun_config(config: &str) -> Result<NativeTunInspection, St
     })
 }
 
-/// Adapt the portable native-TUN intent to the stable bundled Xray runtime.
-/// Xray 26.3.27 predates automatic Windows address/route configuration, so the
-/// service owns that policy and strips those newer ignored settings. Every
+/// Adapt the portable native-TUN intent to the service-owned Windows network
+/// policy. The service configures addresses and routes transactionally, so it
+/// strips Xray's overlapping automatic settings. Every
 /// network-capable outbound is instead bound to the physical interface selected
 /// by Windows before the TUN routes exist.
 pub fn rewrite_native_outbound_interface(

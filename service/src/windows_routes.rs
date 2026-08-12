@@ -145,9 +145,9 @@ fn load_route_state(layout: &RuntimeLayout) -> io::Result<KillSwitchRouteState> 
     }
 }
 
-/// Configure the address, DNS and split-default routes that newer prerelease
-/// Xray builds can create themselves. Varmlen deliberately bundles stable Xray
-/// 26.3.27, whose Windows TUN only owns the Wintun packet session.
+/// Configure the address, DNS and split-default routes transactionally in the
+/// service. Xray owns the Wintun packet session while Varmlen remains the sole
+/// owner of Windows network policy and rollback.
 pub fn configure_stable_tun_network() -> io::Result<()> {
     netsh(&[
         "interface",
