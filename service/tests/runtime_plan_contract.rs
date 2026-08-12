@@ -5,13 +5,56 @@ use varmlen_protocol::{
 };
 use varmlen_service::{
     process_plan::{
-        socks5_ipv4_connect_request, validate_socks5_connect_header, validate_socks5_method_reply,
-        XrayConfigTransaction, XrayInvocation, XrayInvocationKind,
+        retry_address_not_ready, socks5_ipv4_connect_request, validate_socks5_connect_header,
+        validate_socks5_method_reply, XrayConfigTransaction, XrayInvocation, XrayInvocationKind,
     },
     state_record::{
         decode_desired_state, encode_desired_state, DesiredStatePhase, DesiredStateRecord,
     },
 };
+
+#[tokio::test]
+async fn transient_windows_address_not_ready_is_retried_before_tun_probe() {
+    let mut attempts = 0;
+    let value = retry_address_not_ready(
+        || {
+            attempts += 1;
+            if attempts < 3 {
+                Err(std::io::Error::from_raw_os_error(10049))
+            } else {
+                Ok("bound")
+            }
+        },
+        4,
+        std::time::Duration::ZERO,
+    )
+    .await
+    .expect("eventually bindable TUN address");
+
+    assert_eq!(value, "bound");
+    assert_eq!(attempts, 3);
+}
+
+#[tokio::test]
+async fn permanent_bind_errors_are_not_hidden_by_tun_readiness_retry() {
+    let mut attempts = 0;
+    let error = retry_address_not_ready(
+        || {
+            attempts += 1;
+            Err::<(), _>(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "denied",
+            ))
+        },
+        4,
+        std::time::Duration::ZERO,
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    assert_eq!(attempts, 1);
+}
 
 fn request() -> ConnectRequest {
     ConnectRequest {

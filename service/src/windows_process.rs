@@ -46,6 +46,7 @@ pub struct ManagedXray {
 
 #[derive(Debug, Clone)]
 pub struct PreparedXrayConfig {
+    layout: RuntimeLayout,
     transaction: XrayConfigTransaction,
     contents: Vec<u8>,
 }
@@ -78,10 +79,8 @@ impl ManagedXray {
         Ok(Self { _job: job, child })
     }
 
-    pub fn start_prepared(
-        layout: &RuntimeLayout,
-        prepared: &PreparedXrayConfig,
-    ) -> io::Result<Self> {
+    pub fn start_prepared(prepared: &PreparedXrayConfig) -> io::Result<Self> {
+        let layout = &prepared.layout;
         ensure_runtime_assets(layout)?;
         let log = open_log(layout)?;
         let log_error = log.try_clone()?;
@@ -134,6 +133,7 @@ pub async fn prepare_native_config(
     atomic_write(&layout.candidate_config, config.as_bytes())?;
     validate_config_syntax(layout, &transaction.preflight()).await?;
     Ok(PreparedXrayConfig {
+        layout: layout.clone(),
         transaction,
         contents: config.as_bytes().to_vec(),
     })

@@ -178,6 +178,25 @@ impl CoreManager {
         Ok(binary)
     }
 
+    pub fn runtime_layout(&self, tag: &str) -> Result<RuntimeLayout, String> {
+        let tag = normalize_tag(tag);
+        let executable = self.resolve_binary(&tag)?;
+        if tag == BUNDLED_XRAY_VERSION {
+            return Ok(self.layout.clone());
+        }
+        let directory = executable
+            .parent()
+            .ok_or_else(|| "selected Xray has no runtime directory".to_string())?
+            .to_path_buf();
+        let mut layout = self.layout.clone();
+        layout.install_dir = directory.clone();
+        layout.xray_executable = executable;
+        layout.wintun_library = stage_runtime_asset(&self.layout.wintun_library, &directory)?;
+        layout.geoip_database = stage_runtime_asset(&self.layout.geoip_database, &directory)?;
+        layout.geosite_database = stage_runtime_asset(&self.layout.geosite_database, &directory)?;
+        Ok(layout)
+    }
+
     pub fn local_info(&self, latest: Option<String>) -> CoreInfo {
         let active = self.active_tag();
         let mut tags = vec![BUNDLED_XRAY_VERSION.to_string()];
@@ -343,6 +362,53 @@ impl CoreManager {
     fn active_file(&self) -> PathBuf {
         self.layout.state_dir.join("active-xray.txt")
     }
+}
+
+fn stage_runtime_asset(
+    source: &std::path::Path,
+    directory: &std::path::Path,
+) -> Result<PathBuf, String> {
+    let name = source
+        .file_name()
+        .ok_or_else(|| format!("runtime asset has no file name: {}", source.display()))?;
+    let destination = directory.join(name);
+    if let Ok(metadata) = std::fs::metadata(&destination) {
+        if metadata.is_file() && metadata.len() > 0 {
+            return Ok(destination);
+        }
+        return Err(format!(
+            "selected core runtime asset is invalid: {}",
+            destination.display()
+        ));
+    }
+    let metadata = std::fs::metadata(source)
+        .map_err(|error| format!("inspect runtime asset {}: {error}", source.display()))?;
+    if !metadata.is_file() || metadata.len() == 0 {
+        return Err(format!(
+            "runtime asset is missing or empty: {}",
+            source.display()
+        ));
+    }
+    std::fs::create_dir_all(directory)
+        .map_err(|error| format!("create selected core runtime directory: {error}"))?;
+    let temporary = directory.join(format!(
+        ".{}.{}.tmp",
+        name.to_string_lossy(),
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&temporary);
+    std::fs::copy(source, &temporary)
+        .map_err(|error| format!("stage runtime asset {}: {error}", source.display()))?;
+    if let Err(error) = std::fs::rename(&temporary, &destination) {
+        let _ = std::fs::remove_file(&temporary);
+        if !destination.is_file() {
+            return Err(format!(
+                "install runtime asset {}: {error}",
+                destination.display()
+            ));
+        }
+    }
+    Ok(destination)
 }
 
 fn http_client() -> Result<reqwest::Client, String> {

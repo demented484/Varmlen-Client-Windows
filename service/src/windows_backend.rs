@@ -16,6 +16,7 @@ use varmlen_service_core::{
 
 use crate::{
     core_manager::CoreManager,
+    process_plan::retry_address_not_ready,
     state_record::DesiredStateRecord,
     windows_adapter::{best_outbound_interface_name, find_varmlen_adapter, AdapterInfo},
     windows_process::{prepare_native_config, validate_config, ManagedXray, PreparedXrayConfig},
@@ -66,11 +67,9 @@ impl WindowsBackend {
     }
 
     fn layout_for_core(&self, version: &str) -> Result<RuntimeLayout, ServiceError> {
-        let mut layout = self.layout.clone();
-        layout.xray_executable = CoreManager::new(self.layout.clone())
-            .resolve_binary(version)
-            .map_err(|error| service_error(ServiceErrorCode::ValidationFailed, error))?;
-        Ok(layout)
+        CoreManager::new(self.layout.clone())
+            .runtime_layout(version)
+            .map_err(|error| service_error(ServiceErrorCode::ValidationFailed, error))
     }
 
     async fn stop_process(&mut self) -> io::Result<()> {
@@ -115,8 +114,22 @@ impl WindowsBackend {
             .unwrap_or(TUN_IPV4_GATEWAY)
             .parse()
             .map_err(|error| io::Error::other(format!("invalid TUN probe address: {error}")))?;
-        let socket = TcpSocket::new_v4()?;
-        socket.bind(std::net::SocketAddr::new(source, 0))?;
+        let socket = retry_address_not_ready(
+            || {
+                let socket = TcpSocket::new_v4()?;
+                socket.bind(std::net::SocketAddr::new(source, 0))?;
+                Ok(socket)
+            },
+            100,
+            Duration::from_millis(100),
+        )
+        .await
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("Varmlen TUN address {source} did not become bindable: {error}"),
+            )
+        })?;
         timeout(
             Duration::from_secs(5),
             socket.connect("1.1.1.1:443".parse().unwrap()),
@@ -269,7 +282,7 @@ impl ConnectionBackend for WindowsBackend {
             )
         })?;
         self.active = Some(
-            ManagedXray::start_prepared(&self.layout, prepared)
+            ManagedXray::start_prepared(prepared)
                 .map_err(|error| service_error(ServiceErrorCode::XrayStartFailed, error))?,
         );
         Ok(())

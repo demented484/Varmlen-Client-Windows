@@ -1,4 +1,7 @@
 use std::path::PathBuf;
+use std::{io, time::Duration};
+
+use tokio::time::sleep;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum XrayInvocationKind {
@@ -75,6 +78,36 @@ impl XrayConfigTransaction {
     pub fn active_path(&self) -> &std::path::Path {
         &self.active_path
     }
+}
+
+pub async fn retry_address_not_ready<T, F>(
+    mut operation: F,
+    attempts: usize,
+    delay: Duration,
+) -> io::Result<T>
+where
+    F: FnMut() -> io::Result<T>,
+{
+    if attempts == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "address readiness requires at least one attempt",
+        ));
+    }
+    for attempt in 0..attempts {
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if attempt + 1 < attempts
+                    && (error.raw_os_error() == Some(10049)
+                        || error.kind() == io::ErrorKind::AddrNotAvailable) =>
+            {
+                sleep(delay).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("attempt loop always returns on its final iteration")
 }
 
 pub fn socks5_ipv4_connect_request(address: [u8; 4], port: u16) -> [u8; 10] {
