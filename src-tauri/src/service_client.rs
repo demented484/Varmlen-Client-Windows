@@ -4,8 +4,9 @@ mod platform {
 
     use tokio::{io::AsyncWriteExt, net::windows::named_pipe::ClientOptions};
     use varmlen_protocol::{
-        decode_response, encode_payload, ConnectRequest, RequestEnvelope, ServiceCommand,
-        ServiceResponse, ServiceState, MAX_LOG_TAIL_BYTES, PROTOCOL_VERSION, SERVICE_PIPE_NAME,
+        decode_response, encode_payload, ConnectRequest, CoreCommand, RequestEnvelope,
+        ServiceCommand, ServiceResponse, ServiceState, MAX_LOG_TAIL_BYTES, PROTOCOL_VERSION,
+        SERVICE_PIPE_NAME,
     };
     use varmlen_service_core::framing::{read_payload, write_payload};
 
@@ -41,6 +42,10 @@ mod platform {
         }
     }
 
+    pub async fn core(command: CoreCommand) -> Result<ServiceResponse, String> {
+        request(ServiceCommand::Core(command)).await
+    }
+
     fn expect_state(response: ServiceResponse) -> Result<ServiceState, String> {
         match response {
             ServiceResponse::State(state) => Ok(state),
@@ -49,6 +54,15 @@ mod platform {
     }
 
     async fn request(command: ServiceCommand) -> Result<ServiceResponse, String> {
+        let response_timeout = match &command {
+            ServiceCommand::Core(CoreCommand::Install { .. }) => {
+                std::time::Duration::from_secs(600)
+            }
+            ServiceCommand::Core(CoreCommand::Activate { .. }) => {
+                std::time::Duration::from_secs(120)
+            }
+            _ => std::time::Duration::from_secs(60),
+        };
         let operation_id = NEXT_OPERATION_ID.fetch_add(1, Ordering::Relaxed);
         let request = RequestEnvelope {
             version: PROTOCOL_VERSION,
@@ -75,11 +89,10 @@ mod platform {
             .map_err(|_| "timed out flushing the service request".to_string())?
             .map_err(|error| format!("failed to flush service request: {error}"))?;
 
-        let response =
-            tokio::time::timeout(std::time::Duration::from_secs(60), read_payload(&mut pipe))
-                .await
-                .map_err(|_| "VarmlenService command timed out".to_string())?
-                .map_err(|error| format!("failed to read service response: {error:?}"))?;
+        let response = tokio::time::timeout(response_timeout, read_payload(&mut pipe))
+            .await
+            .map_err(|_| "VarmlenService command timed out".to_string())?
+            .map_err(|error| format!("failed to read service response: {error:?}"))?;
         let response = decode_response(&response)
             .map_err(|error| format!("invalid service response: {error:?}"))?;
         if response.operation_id != operation_id {
@@ -91,7 +104,7 @@ mod platform {
 
 #[cfg(not(windows))]
 mod platform {
-    use varmlen_protocol::{ConnectRequest, ServiceState};
+    use varmlen_protocol::{ConnectRequest, CoreCommand, ServiceResponse, ServiceState};
 
     pub async fn service_status() -> Result<ServiceState, String> {
         Err("VarmlenService is only supported on Windows".into())
@@ -112,6 +125,10 @@ mod platform {
     pub async fn clear_log() -> Result<(), String> {
         Err("VarmlenService is only supported on Windows".into())
     }
+
+    pub async fn core(_command: CoreCommand) -> Result<ServiceResponse, String> {
+        Err("VarmlenService is only supported on Windows".into())
+    }
 }
 
-pub use platform::{clear_log, connect, disconnect, log_tail, service_status};
+pub use platform::{clear_log, connect, core, disconnect, log_tail, service_status};

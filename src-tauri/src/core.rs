@@ -1,29 +1,6 @@
-use serde::Serialize;
+use varmlen_protocol::{CoreCommand, CoreInfo, CoreRelease, ServiceResponse};
 
-pub const BUNDLED_XRAY_VERSION: &str = "26.3.27";
-
-#[derive(Serialize, Clone)]
-pub struct InstalledVersion {
-    pub tag: String,
-    pub active: bool,
-    pub bundled: bool,
-}
-
-#[derive(Serialize)]
-pub struct CoreInfo {
-    pub installed: Vec<InstalledVersion>,
-    pub active: Option<String>,
-    pub latest: Option<String>,
-    pub has_update: bool,
-}
-
-#[derive(Serialize)]
-pub struct CoreRelease {
-    pub tag: String,
-    pub name: String,
-    pub date: Option<String>,
-    pub prerelease: bool,
-}
+use crate::service_client;
 
 fn validate_kind(kind: &str) -> Result<(), String> {
     if kind == "xray" {
@@ -36,49 +13,44 @@ fn validate_kind(kind: &str) -> Result<(), String> {
 #[tauri::command]
 pub async fn core_info(kind: String) -> Result<CoreInfo, String> {
     validate_kind(&kind)?;
-    Ok(CoreInfo {
-        installed: vec![InstalledVersion {
-            tag: BUNDLED_XRAY_VERSION.into(),
-            active: true,
-            bundled: true,
-        }],
-        active: Some(BUNDLED_XRAY_VERSION.into()),
-        // The privileged service deliberately runs the installer-pinned core.
-        // Replacing it from an unprivileged GUI would defeat asset integrity.
-        latest: Some(BUNDLED_XRAY_VERSION.into()),
-        has_update: false,
-    })
+    match service_client::core(CoreCommand::Info).await? {
+        ServiceResponse::CoreInfo(info) => Ok(info),
+        _ => Err("VarmlenService returned the wrong core-info response".into()),
+    }
 }
 
 #[tauri::command]
 pub async fn list_core_releases(kind: String) -> Result<Vec<CoreRelease>, String> {
     validate_kind(&kind)?;
-    Ok(vec![CoreRelease {
-        tag: BUNDLED_XRAY_VERSION.into(),
-        name: format!("Xray {BUNDLED_XRAY_VERSION} (bundled)"),
-        date: None,
-        prerelease: false,
-    }])
+    match service_client::core(CoreCommand::ListReleases).await? {
+        ServiceResponse::CoreReleases(releases) => Ok(releases),
+        _ => Err("VarmlenService returned the wrong release-list response".into()),
+    }
 }
 
 #[tauri::command]
-pub async fn core_install(kind: String, _version: Option<String>) -> Result<String, String> {
+pub async fn core_install(kind: String, version: Option<String>) -> Result<String, String> {
     validate_kind(&kind)?;
-    Err("Windows core updates are delivered through signed Varmlen installers".into())
+    match service_client::core(CoreCommand::Install { tag: version }).await? {
+        ServiceResponse::CoreInstalled(tag) => Ok(tag),
+        _ => Err("VarmlenService returned the wrong core-install response".into()),
+    }
 }
 
 #[tauri::command]
 pub async fn core_activate(kind: String, tag: String) -> Result<(), String> {
     validate_kind(&kind)?;
-    if tag.trim_start_matches('v') == BUNDLED_XRAY_VERSION {
-        Ok(())
-    } else {
-        Err("this Xray version is not bundled with the installed service".into())
+    match service_client::core(CoreCommand::Activate { tag }).await? {
+        ServiceResponse::Ack => Ok(()),
+        _ => Err("VarmlenService returned the wrong core-activate response".into()),
     }
 }
 
 #[tauri::command]
-pub async fn core_uninstall(kind: String, _tag: String) -> Result<(), String> {
+pub async fn core_uninstall(kind: String, tag: String) -> Result<(), String> {
     validate_kind(&kind)?;
-    Err("the privileged Windows core can only be removed by uninstalling Varmlen".into())
+    match service_client::core(CoreCommand::Uninstall { tag }).await? {
+        ServiceResponse::Ack => Ok(()),
+        _ => Err("VarmlenService returned the wrong core-uninstall response".into()),
+    }
 }

@@ -11,7 +11,7 @@ use tokio::{
     time::{interval, timeout, MissedTickBehavior},
 };
 use varmlen_protocol::{
-    decode_response, encode_payload, RequestEnvelope, ServiceCommand, ServiceError,
+    decode_response, encode_payload, CoreCommand, RequestEnvelope, ServiceCommand, ServiceError,
     ServiceErrorCode, ServiceResponse, ServiceState, MAX_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use varmlen_service_core::{
@@ -39,6 +39,7 @@ use windows::{
 };
 
 use crate::{
+    core_manager::CoreManager,
     log_store::{clear_logs, tail_log},
     pipe_policy::{
         pipe_security_descriptor_sddl, InstalledUserSid, PipeClientIdentity, CLIENT_IO_TIMEOUT,
@@ -81,6 +82,8 @@ pub fn load_installed_user_sid() -> io::Result<InstalledUserSid> {
 
 pub struct RuntimeExecutor {
     controller: Mutex<ConnectionController<WindowsBackend>>,
+    core_manager: CoreManager,
+    core_operations: Mutex<()>,
     log_path: PathBuf,
 }
 
@@ -90,42 +93,66 @@ impl RuntimeExecutor {
         let log_path = backend.layout().log_file.clone();
         let desired = load_desired_state(backend.layout());
         let mut controller = ConnectionController::disconnected(backend);
-        let (operation_id, recovery) = match desired {
+        let (operation_id, keep_blocked_on_failure, recovery) = match desired {
             Ok(Some(record)) => {
                 let operation_id = record.operation_id;
+                let keep_blocked_on_failure = match &record.phase {
+                    DesiredStatePhase::Connected { request } => request.killswitch,
+                    DesiredStatePhase::Connecting {
+                        candidate,
+                        previous,
+                        requested_kill_switch,
+                    } => {
+                        *requested_kill_switch
+                            || candidate.killswitch
+                            || previous.as_ref().is_some_and(|request| request.killswitch)
+                    }
+                    DesiredStatePhase::Disconnecting { keep_blocked } => *keep_blocked,
+                    DesiredStatePhase::Blocked { .. } => true,
+                    DesiredStatePhase::Disconnected => false,
+                };
                 let recovery = match record.phase {
-                    DesiredStatePhase::Connected { mut request } => {
-                        request.killswitch = false;
+                    DesiredStatePhase::Connected { request } => {
                         controller.connect(operation_id, request).await
                     }
                     DesiredStatePhase::Connecting {
-                        previous: Some(mut previous),
+                        previous: Some(previous),
+                        ..
+                    } => controller.connect(operation_id, previous).await,
+                    DesiredStatePhase::Connecting {
+                        requested_kill_switch,
                         ..
                     } => {
-                        previous.killswitch = false;
-                        controller.connect(operation_id, previous).await
+                        controller
+                            .disconnect(operation_id, requested_kill_switch)
+                            .await
                     }
-                    DesiredStatePhase::Connecting { .. }
-                    | DesiredStatePhase::Disconnecting { .. }
-                    | DesiredStatePhase::Blocked { .. } => {
-                        controller.disconnect(operation_id, false).await
+                    DesiredStatePhase::Disconnecting { keep_blocked } => {
+                        controller.disconnect(operation_id, keep_blocked).await
+                    }
+                    DesiredStatePhase::Blocked { .. } => {
+                        controller.disconnect(operation_id, true).await
                     }
                     DesiredStatePhase::Disconnected => {
                         controller.disconnect(operation_id, false).await
                     }
                 };
-                (operation_id, recovery)
+                (operation_id, keep_blocked_on_failure, recovery)
             }
-            Ok(None) => (0, controller.disconnect(0, false).await),
-            Err(_) => (0, controller.disconnect(0, false).await),
+            Ok(None) => (0, false, controller.disconnect(0, false).await),
+            Err(_) => (0, false, controller.disconnect(0, false).await),
         };
-        if recovery.is_err() {
-            // This preview has no fail-closed Windows backend. Keep IPC
-            // available and report the real fail-open state instead of claiming
-            // that traffic is blocked.
-            controller.force_disconnected(operation_id);
+        if recovery.is_err()
+            && controller
+                .disconnect(operation_id, keep_blocked_on_failure)
+                .await
+                .is_err()
+        {
+            controller.force_blocked(operation_id);
         }
         Ok(Self {
+            core_manager: CoreManager::new(controller.backend().layout().clone()),
+            core_operations: Mutex::new(()),
             controller: Mutex::new(controller),
             log_path,
         })
@@ -144,7 +171,8 @@ impl CommandExecutor for RuntimeExecutor {
                 self.controller.lock().await.state().clone(),
             )),
             ServiceCommand::Connect(mut request) => {
-                request.killswitch = false;
+                let _operation = self.core_operations.lock().await;
+                request.xray_version = self.core_manager.active_tag();
                 self.controller
                     .lock()
                     .await
@@ -152,11 +180,11 @@ impl CommandExecutor for RuntimeExecutor {
                     .await
                     .map(ServiceResponse::State)
             }
-            ServiceCommand::Disconnect { .. } => self
+            ServiceCommand::Disconnect { keep_blocked } => self
                 .controller
                 .lock()
                 .await
-                .disconnect(operation_id, false)
+                .disconnect(operation_id, keep_blocked)
                 .await
                 .map(ServiceResponse::State),
             ServiceCommand::LogTail { max_bytes } => tail_log(&self.log_path, max_bytes as usize)
@@ -165,8 +193,98 @@ impl CommandExecutor for RuntimeExecutor {
             ServiceCommand::ClearLog => clear_logs(&self.log_path)
                 .map(|()| ServiceResponse::Ack)
                 .map_err(|error| ServiceError::new(ServiceErrorCode::Internal, error.to_string())),
+            ServiceCommand::Core(command) => self.execute_core(operation_id, command).await,
         }
     }
+}
+
+impl RuntimeExecutor {
+    async fn execute_core(
+        &self,
+        operation_id: u64,
+        command: CoreCommand,
+    ) -> Result<ServiceResponse, ServiceError> {
+        match command {
+            CoreCommand::Info => {
+                let latest = self
+                    .core_manager
+                    .list_releases()
+                    .await
+                    .ok()
+                    .and_then(|releases| releases.into_iter().next().map(|release| release.tag));
+                Ok(ServiceResponse::CoreInfo(
+                    self.core_manager.local_info(latest),
+                ))
+            }
+            CoreCommand::Active => {
+                let _operation = self.core_operations.lock().await;
+                Ok(ServiceResponse::CoreActive(self.core_manager.active_tag()))
+            }
+            CoreCommand::ListReleases => self
+                .core_manager
+                .list_releases()
+                .await
+                .map(ServiceResponse::CoreReleases)
+                .map_err(core_error),
+            CoreCommand::Install { tag } => {
+                let _operation = self.core_operations.lock().await;
+                self.core_manager
+                    .install(tag)
+                    .await
+                    .map(ServiceResponse::CoreInstalled)
+                    .map_err(core_error)
+            }
+            CoreCommand::Activate { tag } => {
+                let _operation = self.core_operations.lock().await;
+                let old_tag = self.core_manager.active_tag();
+                self.core_manager.activate(&tag).await.map_err(core_error)?;
+                let new_tag = self.core_manager.active_tag();
+                if new_tag == old_tag {
+                    return Ok(ServiceResponse::Ack);
+                }
+
+                let mut controller = self.controller.lock().await;
+                if controller.state().phase == varmlen_protocol::ConnectionPhase::Connected {
+                    let Some(mut request) = controller.backend().active_request() else {
+                        let rollback = self.core_manager.activate(&old_tag).await;
+                        return Err(ServiceError::new(
+                            ServiceErrorCode::Internal,
+                            match rollback {
+                                Ok(()) => "connected service has no active connection request".into(),
+                                Err(rollback) => format!(
+                                    "connected service has no active connection request; also failed to restore Xray {old_tag}: {rollback}"
+                                ),
+                            },
+                        ));
+                    };
+                    request.xray_version = new_tag;
+                    if let Err(error) = controller.connect(operation_id, request).await {
+                        let rollback = self.core_manager.activate(&old_tag).await;
+                        return match rollback {
+                            Ok(()) => Err(error),
+                            Err(rollback) => Err(ServiceError::new(
+                                ServiceErrorCode::RestoreFailed,
+                                format!(
+                                    "{}; also failed to restore Xray {old_tag}: {rollback}",
+                                    error.message
+                                ),
+                            )),
+                        };
+                    }
+                }
+                Ok(ServiceResponse::Ack)
+            }
+            CoreCommand::Uninstall { tag } => {
+                let _operation = self.core_operations.lock().await;
+                self.core_manager.uninstall(&tag).map_err(core_error)?;
+                Ok(ServiceResponse::Ack)
+            }
+        }
+    }
+}
+
+fn core_error(message: impl Into<String>) -> ServiceError {
+    ServiceError::new(ServiceErrorCode::Internal, message)
 }
 
 pub struct PipeHost {

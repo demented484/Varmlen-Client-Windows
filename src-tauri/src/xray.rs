@@ -4,8 +4,7 @@
 //! Wintun adapter, assigns dual-stack gateways and DNS, installs the default
 //! routes, and binds its own outbound sockets to the physical interface. Xray
 //! routing handles site and process split rules. The LocalSystem service owns
-//! lifecycle and recovery; this preview intentionally has no fail-closed WFP
-//! enforcement.
+//! lifecycle, fail-closed route enforcement and recovery.
 
 use serde_json::{json, Value};
 

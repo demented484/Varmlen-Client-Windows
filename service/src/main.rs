@@ -3,8 +3,8 @@ fn main() {
     let command = std::env::args_os().nth(1);
     if command.as_deref() == Some(std::ffi::OsStr::new("--cleanup")) {
         let result = (|| -> std::io::Result<()> {
-            varmlen_service::windows_wfp::cleanup_persistent_policy()?;
             let layout = varmlen_service::windows_state::runtime_layout()?;
+            varmlen_service::windows_routes::remove_killswitch_routes(&layout)?;
             varmlen_service::windows_state::clear_desired_state(&layout)
         })();
         if let Err(error) = result {

@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
 pub const MAX_LOG_TAIL_BYTES: u32 = 256 * 1024;
 pub const SERVICE_PIPE_NAME: &str = r"\\.\pipe\Varmlen\Service\v1";
@@ -10,6 +10,7 @@ const MAX_CONFIG_BYTES: usize = 384 * 1024;
 const MAX_SERVER_ENDPOINTS: usize = 64;
 const MAX_EXCLUDED_APPS: usize = 256;
 const MAX_APP_SELECTOR_BYTES: usize = 4096;
+const MAX_CORE_TAG_BYTES: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppSelector {
@@ -19,6 +20,8 @@ pub struct AppSelector {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectRequest {
+    #[serde(default = "default_xray_version")]
+    pub xray_version: String,
     pub xray_config: String,
     pub validation_config: String,
     pub server_endpoints: Vec<SocketAddr>,
@@ -29,6 +32,44 @@ pub struct ConnectRequest {
     pub allow_lan: bool,
 }
 
+fn default_xray_version() -> String {
+    "26.3.27".into()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoreCommand {
+    Info,
+    Active,
+    ListReleases,
+    Install { tag: Option<String> },
+    Activate { tag: String },
+    Uninstall { tag: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoreInstalledVersion {
+    pub tag: String,
+    pub active: bool,
+    pub bundled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoreInfo {
+    pub installed: Vec<CoreInstalledVersion>,
+    pub active: Option<String>,
+    pub latest: Option<String>,
+    pub has_update: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoreRelease {
+    pub tag: String,
+    pub name: String,
+    pub date: Option<String>,
+    pub prerelease: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ServiceCommand {
@@ -37,6 +78,7 @@ pub enum ServiceCommand {
     Disconnect { keep_blocked: bool },
     LogTail { max_bytes: u32 },
     ClearLog,
+    Core(CoreCommand),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +116,10 @@ pub struct ServiceState {
 pub enum ServiceResponse {
     State(ServiceState),
     LogTail(String),
+    CoreInfo(CoreInfo),
+    CoreReleases(Vec<CoreRelease>),
+    CoreInstalled(String),
+    CoreActive(String),
     Ack,
 }
 
@@ -135,6 +181,7 @@ pub fn validate_request(request: &RequestEnvelope) -> Result<(), ServiceErrorCod
 
     match &request.command {
         ServiceCommand::Connect(connect) => validate_connect_request(connect),
+        ServiceCommand::Core(command) => validate_core_command(command),
         ServiceCommand::LogTail { max_bytes }
             if *max_bytes == 0 || *max_bytes > MAX_LOG_TAIL_BYTES =>
         {
@@ -148,7 +195,8 @@ pub fn validate_request(request: &RequestEnvelope) -> Result<(), ServiceErrorCod
 }
 
 pub fn validate_connect_request(request: &ConnectRequest) -> Result<(), ServiceErrorCode> {
-    let configs_invalid = request.xray_config.is_empty()
+    let configs_invalid = invalid_core_tag(&request.xray_version)
+        || request.xray_config.is_empty()
         || request.validation_config.is_empty()
         || request.xray_config.len() > MAX_CONFIG_BYTES
         || request.validation_config.len() > MAX_CONFIG_BYTES;
@@ -169,6 +217,30 @@ pub fn validate_connect_request(request: &ConnectRequest) -> Result<(), ServiceE
     } else {
         Ok(())
     }
+}
+
+fn validate_core_command(command: &CoreCommand) -> Result<(), ServiceErrorCode> {
+    let tag = match command {
+        CoreCommand::Info | CoreCommand::Active | CoreCommand::ListReleases => return Ok(()),
+        CoreCommand::Install { tag: None } => return Ok(()),
+        CoreCommand::Install { tag: Some(tag) }
+        | CoreCommand::Activate { tag }
+        | CoreCommand::Uninstall { tag } => tag,
+    };
+    if invalid_core_tag(tag) {
+        Err(ServiceErrorCode::InvalidRequest)
+    } else {
+        Ok(())
+    }
+}
+
+fn invalid_core_tag(value: &str) -> bool {
+    let value = value.trim_start_matches('v');
+    value.is_empty()
+        || value.len() > MAX_CORE_TAG_BYTES
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
 }
 
 fn invalid_selector_field(value: &str) -> bool {

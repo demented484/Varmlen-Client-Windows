@@ -10,7 +10,6 @@ import {
   type CoreProgress,
   type CoreRelease,
 } from "$lib/api";
-import { conn } from "$lib/conn.svelte";
 
 function msg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -125,16 +124,17 @@ class CoreStore {
     }
   }
 
-  /** Delete a cached version from disk. If the user is deleting the version
-   *  they're currently using, we tear down the VPN first — leaving the tunnel
-   *  alive while its core binary disappears would be a hung connection. */
+  /** Delete a cached version. An active downloaded core is first replaced by
+   *  another installed version through the service's guarded live reconnect. */
   async uninstall(tag: string): Promise<void> {
     const t = stripV(tag);
     this.switchingTag = t;
     this.error = null;
     try {
-      if (this.isActive(t) && conn.status !== "disconnected") {
-        await conn.disconnect();
+      if (this.isActive(t)) {
+        const fallback = this.info?.installed.find((version) => version.tag !== t);
+        if (!fallback) throw new Error("Install another Xray version before removing this one");
+        await coreActivate(this.kind, fallback.tag);
       }
       await coreUninstall(this.kind, t);
       await this.check();

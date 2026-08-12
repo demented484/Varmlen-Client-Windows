@@ -34,12 +34,12 @@ fn install_waits_for_ipc_readiness_and_does_not_grant_user_modify() {
 }
 
 #[test]
-fn uninstall_is_never_held_hostage_by_legacy_wfp_cleanup() {
+fn uninstall_is_never_held_hostage_by_route_cleanup() {
     let uninstall = macro_body("NSIS_HOOK_PREUNINSTALL");
     assert!(uninstall.contains("ExecToStack"));
     assert!(uninstall.contains("--cleanup"));
     let cleanup_warning = uninstall
-        .find("Legacy WFP cleanup warning")
+        .find("Network route cleanup warning")
         .expect("cleanup warning exists");
     let service_query = uninstall
         .find("sc.exe query VarmlenService")

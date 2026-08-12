@@ -1,8 +1,8 @@
+pub mod core_manager;
 pub mod log_store;
 pub mod pipe_policy;
 pub mod process_plan;
 pub mod state_record;
-pub mod wfp_plan;
 
 pub const SERVICE_NAME: &str = "VarmlenService";
 pub use varmlen_protocol::SERVICE_PIPE_NAME as PIPE_NAME;
@@ -21,5 +21,3 @@ pub mod windows_routes;
 pub mod windows_service;
 #[cfg(windows)]
 pub mod windows_state;
-#[cfg(windows)]
-pub mod windows_wfp;

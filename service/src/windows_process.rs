@@ -252,8 +252,6 @@ async fn wait_for_socks_reachability(child: &mut Child, ports: &[u16]) -> io::Re
         ));
     };
     let deadline = Instant::now() + Duration::from_secs(10);
-    let mut last_error = "effective route did not accept a connection".to_string();
-
     loop {
         if let Some(status) = child.try_wait()? {
             return Err(io::Error::other(format!(
@@ -261,11 +259,11 @@ async fn wait_for_socks_reachability(child: &mut Child, ports: &[u16]) -> io::Re
             )));
         }
 
-        match timeout(Duration::from_secs(3), probe_socks5(*port)).await {
+        let last_error = match timeout(Duration::from_secs(3), probe_socks5(*port)).await {
             Ok(Ok(())) => return Ok(()),
-            Ok(Err(error)) => last_error = error.to_string(),
-            Err(_) => last_error = format!("SOCKS5 validation timed out on port {port}"),
-        }
+            Ok(Err(error)) => error.to_string(),
+            Err(_) => format!("SOCKS5 validation timed out on port {port}"),
+        };
 
         if Instant::now() >= deadline {
             return Err(io::Error::new(

@@ -14,13 +14,16 @@ serde_json.workspace = true
 tokio = { workspace = true, features = ["fs", "net", "process", "signal", "time"] }
 varmlen-protocol = { path = "../crates/varmlen-protocol" }
 varmlen-service-core = { path = "../crates/varmlen-service-core" }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+sha2 = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [
   "Win32_Foundation",
   "Win32_NetworkManagement_IpHelper",
   "Win32_NetworkManagement_Ndis",
-  "Win32_NetworkManagement_WindowsFilteringPlatform",
   "Win32_Networking_WinSock",
   "Win32_Security",
   "Win32_Security_Authorization",
@@ -29,7 +32,6 @@ windows = { version = "0.62.2", features = [
   "Win32_System_Memory",
   "Win32_System_JobObjects",
   "Win32_System_Pipes",
-  "Win32_System_Rpc",
   "Win32_System_Threading",
 ] }
 windows-service = "0.8.1"

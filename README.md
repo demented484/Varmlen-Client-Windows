@@ -41,23 +41,21 @@ tunneling. Built on Tauri 2 and SvelteKit.
   and `XboxGames` libraries. Every suggested or manually selected entry is one
   exact `.exe`; additional campaign/multiplayer binaries can be added with the
   file picker.
-- The kill switch is deliberately disabled in this preview while the previous
-  user-mode WFP enforcement is replaced.
+- The kill switch remains active across reconnects and core crashes through
+  service-owned fail-closed routes, including host routes that prevent a LAN
+  DNS resolver from becoming an escape path.
+- Official XTLS Xray releases can be installed and switched from Settings. The
+  service selects the native x64/ARM64 archive, verifies its published SHA-256,
+  and restores the previous core if a live switch fails.
 
 ## Security model
 
 The unprivileged UI communicates with `VarmlenService` through a versioned,
 size-limited named-pipe protocol. The pipe ACL and client-token check restrict
 commands to `LocalSystem` and the interactive user recorded by the installer.
-Runtime binaries live under the machine installation directory; mutable state
-is protected under `%ProgramData%\Varmlen`.
-
-The connection path does not install WFP filters. The service and uninstaller
-retain bounded best-effort cleanup for policy left by earlier preview builds;
-a cleanup warning never prevents the user from uninstalling Varmlen.
-
-See [the architecture](docs/design/2026-07-29-windows-client.md) and the
-[Windows security/reliability audit](docs/security-audit-2026-08-08.md).
+The bundled runtime lives under the machine installation directory. Downloaded
+core versions and encrypted mutable state live in the service-owned,
+administrator-only `%ProgramData%\Varmlen` directory.
 
 ## Local build
 
@@ -88,8 +86,8 @@ cargo xwin check --workspace --target aarch64-pc-windows-msvc
 The release artifacts are:
 
 ```text
-target/x86_64-pc-windows-msvc/release/bundle/nsis/Varmlen_0.3.0_x64-setup.exe
-target/aarch64-pc-windows-msvc/release/bundle/nsis/Varmlen_0.3.0_arm64-setup.exe
+target/x86_64-pc-windows-msvc/release/bundle/nsis/Varmlen_0.3.1_x64-setup.exe
+target/aarch64-pc-windows-msvc/release/bundle/nsis/Varmlen_0.3.1_arm64-setup.exe
 ```
 
 ## License

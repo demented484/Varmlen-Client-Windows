@@ -15,12 +15,15 @@ use varmlen_service_core::{
 };
 
 use crate::{
+    core_manager::CoreManager,
     state_record::DesiredStateRecord,
     windows_adapter::{best_outbound_interface_name, find_varmlen_adapter, AdapterInfo},
     windows_process::{prepare_native_config, validate_config, ManagedXray, PreparedXrayConfig},
-    windows_routes::configure_stable_tun_network,
+    windows_routes::{
+        configure_stable_tun_network, install_killswitch_routes, remove_killswitch_routes,
+        verify_killswitch_routes,
+    },
     windows_state::{ensure_state_directory, persist_desired_state, runtime_layout},
-    windows_wfp::cleanup_persistent_policy,
 };
 
 pub struct WindowsBackend {
@@ -40,11 +43,6 @@ impl WindowsBackend {
     pub fn open() -> io::Result<Self> {
         let layout = runtime_layout()?;
         ensure_state_directory(&layout)?;
-        // Version 0.3.0 preview used persistent user-mode WFP filters for a
-        // kill switch. They made connection and even uninstallation depend on
-        // fragile filter enumeration. The native Xray TUN does not need them;
-        // clean up old policy best-effort and keep the data path independent.
-        let _ = cleanup_persistent_policy();
         Ok(Self {
             layout,
             active: None,
@@ -61,6 +59,18 @@ impl WindowsBackend {
 
     pub fn layout(&self) -> &RuntimeLayout {
         &self.layout
+    }
+
+    pub fn active_request(&self) -> Option<ConnectRequest> {
+        self.active_request.clone()
+    }
+
+    fn layout_for_core(&self, version: &str) -> Result<RuntimeLayout, ServiceError> {
+        let mut layout = self.layout.clone();
+        layout.xray_executable = CoreManager::new(self.layout.clone())
+            .resolve_binary(version)
+            .map_err(|error| service_error(ServiceErrorCode::ValidationFailed, error))?;
+        Ok(layout)
     }
 
     async fn stop_process(&mut self) -> io::Result<()> {
@@ -165,7 +175,8 @@ impl ConnectionBackend for WindowsBackend {
                 ));
             }
         }
-        validate_config(&self.layout, &request.validation_config)
+        let core_layout = self.layout_for_core(&request.xray_version)?;
+        validate_config(&core_layout, &request.validation_config)
             .await
             .map_err(|error| service_error(ServiceErrorCode::ValidationFailed, error))?;
 
@@ -185,7 +196,7 @@ impl ConnectionBackend for WindowsBackend {
         let effective_config = rewrite_native_outbound_interface(&request.xray_config, &interface)
             .map_err(|error| service_error(ServiceErrorCode::ValidationFailed, error))?;
         self.prepared_candidate = Some(
-            prepare_native_config(&self.layout, &effective_config)
+            prepare_native_config(&core_layout, &effective_config)
                 .await
                 .map_err(|error| service_error(ServiceErrorCode::ValidationFailed, error))?,
         );
@@ -209,14 +220,37 @@ impl ConnectionBackend for WindowsBackend {
                 self.pending_operation_id,
                 candidate.clone(),
                 self.active_request.clone(),
-                false,
+                candidate.killswitch,
             ),
         )
-        .map_err(|error| service_error(ServiceErrorCode::Internal, error))
+        .map_err(|error| service_error(ServiceErrorCode::Internal, error))?;
+        if candidate.killswitch
+            || self
+                .active_request
+                .as_ref()
+                .is_some_and(|request| request.killswitch)
+        {
+            install_killswitch_routes(&self.layout)
+                .map_err(|error| service_error(ServiceErrorCode::HoldFailed, error))?;
+        }
+        Ok(())
     }
 
     async fn verify_transition_hold(&mut self) -> Result<(), ServiceError> {
-        Ok(())
+        let required = self
+            .candidate_request
+            .as_ref()
+            .is_some_and(|request| request.killswitch)
+            || self
+                .active_request
+                .as_ref()
+                .is_some_and(|request| request.killswitch);
+        if required {
+            verify_killswitch_routes(&self.layout, true)
+                .map_err(|error| service_error(ServiceErrorCode::HoldFailed, error))
+        } else {
+            Ok(())
+        }
     }
 
     async fn stop_active(&mut self) -> Result<(), ServiceError> {
@@ -280,7 +314,17 @@ impl ConnectionBackend for WindowsBackend {
     }
 
     async fn release_transition_hold(&mut self) -> Result<(), ServiceError> {
-        Ok(())
+        if self
+            .active_request
+            .as_ref()
+            .is_some_and(|request| request.killswitch)
+        {
+            verify_killswitch_routes(&self.layout, true)
+                .map_err(|error| service_error(ServiceErrorCode::HoldFailed, error))
+        } else {
+            remove_killswitch_routes(&self.layout)
+                .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))
+        }
     }
 
     async fn restore_previous(&mut self) -> Result<(), ServiceError> {
@@ -300,8 +344,11 @@ impl ConnectionBackend for WindowsBackend {
         };
         let effective_config = rewrite_native_outbound_interface(&previous.xray_config, &interface)
             .map_err(|error| service_error(ServiceErrorCode::RestoreFailed, error))?;
+        let core_layout = self
+            .layout_for_core(&previous.xray_version)
+            .map_err(|error| service_error(ServiceErrorCode::RestoreFailed, error.message))?;
         self.active = Some(
-            ManagedXray::start(&self.layout, &effective_config)
+            ManagedXray::start(&core_layout, &effective_config)
                 .map_err(|error| service_error(ServiceErrorCode::RestoreFailed, error))?,
         );
         self.wait_for_candidate()
@@ -323,10 +370,10 @@ impl ConnectionBackend for WindowsBackend {
         Ok(())
     }
 
-    async fn clear_network_state(&mut self, _keep_blocked: bool) -> Result<(), ServiceError> {
+    async fn clear_network_state(&mut self, keep_blocked: bool) -> Result<(), ServiceError> {
         persist_desired_state(
             &self.layout,
-            &DesiredStateRecord::disconnecting(self.pending_operation_id, false),
+            &DesiredStateRecord::disconnecting(self.pending_operation_id, keep_blocked),
         )
         .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))?;
         self.stop_process()
@@ -339,12 +386,26 @@ impl ConnectionBackend for WindowsBackend {
         self.active_interface = None;
         self.previous_interface = None;
         self.candidate_interface = None;
-        let _ = cleanup_persistent_policy();
-        persist_desired_state(
-            &self.layout,
-            &DesiredStateRecord::disconnected(self.pending_operation_id),
-        )
-        .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))
+        if keep_blocked {
+            install_killswitch_routes(&self.layout)
+                .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))?;
+            persist_desired_state(
+                &self.layout,
+                &DesiredStateRecord::blocked(
+                    self.pending_operation_id,
+                    "kill switch requested while disconnected",
+                ),
+            )
+            .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))
+        } else {
+            remove_killswitch_routes(&self.layout)
+                .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))?;
+            persist_desired_state(
+                &self.layout,
+                &DesiredStateRecord::disconnected(self.pending_operation_id),
+            )
+            .map_err(|error| service_error(ServiceErrorCode::CleanupFailed, error))
+        }
     }
 
     async fn active_is_running(&mut self) -> Result<bool, ServiceError> {
@@ -357,7 +418,9 @@ impl ConnectionBackend for WindowsBackend {
     }
 
     fn unexpected_failure_keep_blocked(&self) -> bool {
-        false
+        self.active_request
+            .as_ref()
+            .is_some_and(|request| request.killswitch)
     }
 }
 

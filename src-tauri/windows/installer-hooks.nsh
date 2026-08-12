@@ -116,8 +116,8 @@
   Pop $0
   Pop $1
   ${If} $0 != 0
-    DetailPrint "Legacy WFP cleanup warning: $1"
-    MessageBox MB_ICONEXCLAMATION "Varmlen could not fully remove its legacy WFP metadata. Uninstallation will continue; no Varmlen WFP policy is used by this build.$\r$\n$1"
+    DetailPrint "Network route cleanup warning: $1"
+    MessageBox MB_ICONEXCLAMATION "Varmlen could not fully remove its temporary network routes. Uninstallation will continue.$\r$\n$1"
   ${EndIf}
   nsExec::ExecToStack 'sc.exe query VarmlenService'
   Pop $0

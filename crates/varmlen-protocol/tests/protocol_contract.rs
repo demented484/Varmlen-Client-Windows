@@ -1,7 +1,7 @@
 use varmlen_protocol::{
     decode_request, decode_response, encode_payload, validate_request, AppSelector, ConnectRequest,
-    ConnectionPhase, RequestEnvelope, ResponseEnvelope, ServiceCommand, ServiceErrorCode,
-    ServiceResponse, ServiceState, MAX_LOG_TAIL_BYTES, PROTOCOL_VERSION,
+    ConnectionPhase, CoreCommand, RequestEnvelope, ResponseEnvelope, ServiceCommand,
+    ServiceErrorCode, ServiceResponse, ServiceState, MAX_LOG_TAIL_BYTES, PROTOCOL_VERSION,
 };
 
 fn valid_request() -> RequestEnvelope {
@@ -9,6 +9,7 @@ fn valid_request() -> RequestEnvelope {
         version: PROTOCOL_VERSION,
         operation_id: 41,
         command: ServiceCommand::Connect(ConnectRequest {
+            xray_version: "26.3.27".into(),
             xray_config: r#"{"inbounds":[],"outbounds":[]}"#.into(),
             validation_config: r#"{"inbounds":[],"outbounds":[]}"#.into(),
             server_endpoints: vec!["203.0.113.7:443".parse().unwrap()],
@@ -21,6 +22,34 @@ fn valid_request() -> RequestEnvelope {
             allow_lan: false,
         }),
     }
+}
+
+#[test]
+fn rejects_a_connect_request_with_an_unsafe_core_tag() {
+    let mut request = valid_request();
+    let ServiceCommand::Connect(connect) = &mut request.command else {
+        unreachable!()
+    };
+    connect.xray_version = "../../xray".into();
+    assert_eq!(
+        validate_request(&request),
+        Err(ServiceErrorCode::InvalidRequest)
+    );
+}
+
+#[test]
+fn rejects_an_unsafe_core_management_tag() {
+    let request = RequestEnvelope {
+        version: PROTOCOL_VERSION,
+        operation_id: 78,
+        command: ServiceCommand::Core(CoreCommand::Activate {
+            tag: r"..\evil".into(),
+        }),
+    };
+    assert_eq!(
+        validate_request(&request),
+        Err(ServiceErrorCode::InvalidRequest)
+    );
 }
 
 #[test]
@@ -44,6 +73,32 @@ fn rejects_a_withdrawn_protocol_version() {
         validate_request(&request),
         Err(ServiceErrorCode::UnsupportedVersion)
     );
+}
+
+#[test]
+fn protocol_carries_privileged_core_management_commands() {
+    for command in [
+        CoreCommand::Info,
+        CoreCommand::Active,
+        CoreCommand::ListReleases,
+        CoreCommand::Install {
+            tag: Some("26.7.28".into()),
+        },
+        CoreCommand::Activate {
+            tag: "26.7.28".into(),
+        },
+        CoreCommand::Uninstall {
+            tag: "26.7.28".into(),
+        },
+    ] {
+        let request = RequestEnvelope {
+            version: PROTOCOL_VERSION,
+            operation_id: 77,
+            command: ServiceCommand::Core(command.clone()),
+        };
+        let decoded = decode_request(&encode_payload(&request).unwrap()).unwrap();
+        assert_eq!(decoded.command, ServiceCommand::Core(command));
+    }
 }
 
 #[test]

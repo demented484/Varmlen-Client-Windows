@@ -58,8 +58,11 @@ pub async fn vpn_connect(
     log_level: Option<String>,
 ) -> Result<HelperResponse, String> {
     validate_server(&server)?;
-    let _ = killswitch;
     let _operation = vpn_op_lock().lock().await;
+    let xray_version = match service_client::core(varmlen_protocol::CoreCommand::Active).await? {
+        varmlen_protocol::ServiceResponse::CoreActive(tag) => tag,
+        _ => return Err("VarmlenService returned the wrong active-core response".into()),
+    };
     let apps_selective = split.apps_selective();
     let app_selectors = resolve_app_selectors(&split.apps)?;
     split.apps = app_selectors
@@ -77,15 +80,13 @@ pub async fn vpn_connect(
     let endpoints = resolve_server_endpoints(&server).await?;
 
     let state = service_client::connect(ConnectRequest {
+        xray_version,
         xray_config,
         validation_config,
         server_endpoints: endpoints,
         excluded_apps: app_selectors,
         apps_selective,
-        // User-mode WFP enforcement was removed from the Windows preview.
-        // Do not claim fail-closed behavior until a reviewed, signed backend is
-        // available; native Xray TUN routing remains fully functional.
-        killswitch: false,
+        killswitch,
         allow_lan,
     })
     .await?;
@@ -95,8 +96,8 @@ pub async fn vpn_connect(
 #[tauri::command]
 pub async fn vpn_disconnect() -> Result<HelperResponse, String> {
     let _operation = vpn_op_lock().lock().await;
-    // An explicit power-button disconnect restores ordinary networking. This
-    // preview has no persistent fail-closed hold.
+    // Explicit power-button disconnect restores ordinary networking. The kill
+    // switch remains armed only for an unexpected core/tunnel failure.
     service_client::disconnect(false).await.map(response)
 }
 

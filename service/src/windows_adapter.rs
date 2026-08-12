@@ -1,4 +1,9 @@
-use std::{io, mem::size_of, net::SocketAddr};
+use std::{
+    collections::HashSet,
+    io,
+    mem::size_of,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+};
 
 use varmlen_service_core::runtime::{TUN_ADAPTER_DESCRIPTION, TUN_ADAPTER_NAME};
 use windows::{
@@ -94,6 +99,106 @@ pub fn find_varmlen_adapter() -> io::Result<Option<AdapterInfo>> {
             current = adapter.Next;
         }
         return Ok(None);
+    }
+}
+
+/// DNS servers assigned to physical/virtual interfaces outside Varmlen. The
+/// route-only kill switch installs host blackholes for these addresses so a
+/// LAN router cannot become a DNS escape hatch while local-network access is
+/// enabled.
+pub fn physical_dns_servers() -> io::Result<Vec<IpAddr>> {
+    let mut bytes = 15 * 1024u32;
+    loop {
+        let words = (bytes as usize).div_ceil(size_of::<usize>());
+        let mut storage = vec![0usize; words];
+        // SAFETY: storage is aligned, writable for bytes, and remains alive
+        // while the adapter and DNS linked lists are traversed.
+        let result = unsafe {
+            GetAdaptersAddresses(
+                AF_UNSPEC.0 as u32,
+                GAA_FLAG_INCLUDE_PREFIX,
+                None,
+                Some(storage.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>()),
+                &mut bytes,
+            )
+        };
+        if result == ERROR_BUFFER_OVERFLOW.0 {
+            continue;
+        }
+        if result != ERROR_SUCCESS.0 {
+            return Err(io::Error::from_raw_os_error(result as i32));
+        }
+
+        let mut servers = HashSet::new();
+        let mut current = storage.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
+        while !current.is_null() {
+            // SAFETY: current points into the valid GetAdaptersAddresses list.
+            let adapter = unsafe { &*current };
+            let friendly = pwstr_to_string(adapter.FriendlyName);
+            let description = pwstr_to_string(adapter.Description);
+            let is_varmlen = friendly.eq_ignore_ascii_case(TUN_ADAPTER_NAME)
+                || description.eq_ignore_ascii_case(TUN_ADAPTER_DESCRIPTION);
+            if !is_varmlen {
+                let mut dns = adapter.FirstDnsServerAddress;
+                while !dns.is_null() {
+                    // SAFETY: DNS entries and their socket addresses belong to
+                    // the same live GetAdaptersAddresses buffer.
+                    let address = unsafe { &(*dns).Address };
+                    if let Some(address) = ip_from_sockaddr(address.lpSockaddr) {
+                        if needs_host_blackhole(address) {
+                            servers.insert(address);
+                        }
+                    }
+                    // SAFETY: DNS entries are part of the same valid list.
+                    dns = unsafe { (*dns).Next };
+                }
+            }
+            current = adapter.Next;
+        }
+        let mut servers: Vec<_> = servers.into_iter().collect();
+        servers.sort_by_key(ToString::to_string);
+        return Ok(servers);
+    }
+}
+
+fn needs_host_blackhole(address: IpAddr) -> bool {
+    // Public resolvers are already covered by the split-default fallback. Only
+    // local DNS can win through a more-specific LAN route and needs a /32 or
+    // /128 override.
+    match address {
+        IpAddr::V4(address) => {
+            let [first, second, ..] = address.octets();
+            address.is_private()
+                || address.is_link_local()
+                || (first == 100 && (64..=127).contains(&second))
+        }
+        IpAddr::V6(address) => {
+            let first = address.octets()[0];
+            (first & 0xfe) == 0xfc || (first == 0xfe && (address.octets()[1] & 0xc0) == 0x80)
+        }
+    }
+}
+
+fn ip_from_sockaddr(address: *const SOCKADDR) -> Option<IpAddr> {
+    if address.is_null() {
+        return None;
+    }
+    // SAFETY: the caller passes a GetAdaptersAddresses socket address whose
+    // concrete allocation matches its family field.
+    match unsafe { (*address).sa_family.0 } {
+        family if family == AF_INET.0 => {
+            // SAFETY: AF_INET guarantees a complete SOCKADDR_IN.
+            let address = unsafe { &*address.cast::<SOCKADDR_IN>() };
+            let octets = unsafe { address.sin_addr.S_un.S_addr }.to_ne_bytes();
+            Some(IpAddr::V4(Ipv4Addr::from(octets)))
+        }
+        family if family == AF_INET6.0 => {
+            // SAFETY: AF_INET6 guarantees a complete SOCKADDR_IN6.
+            let address = unsafe { &*address.cast::<SOCKADDR_IN6>() };
+            let octets = unsafe { address.sin6_addr.u.Byte };
+            Some(IpAddr::V6(Ipv6Addr::from(octets)))
+        }
+        _ => None,
     }
 }
 

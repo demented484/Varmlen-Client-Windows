@@ -3,8 +3,7 @@ use std::path::PathBuf;
 use serde_json::json;
 use varmlen_service_core::runtime::{
     inspect_native_tun_config, inspect_validation_config, rewrite_native_outbound_interface,
-    rewrite_validation_ports, AssetArch, PolicyMode, PolicySpec, RuntimeLayout, DNS_FILTER_WEIGHT,
-    LOOPBACK_FILTER_WEIGHT, XRAY_FILTER_WEIGHT,
+    rewrite_validation_ports, AssetArch, RuntimeLayout,
 };
 
 fn native_config() -> String {
@@ -201,48 +200,4 @@ fn architecture_assets_follow_the_real_target() {
     assert_eq!(arm64.wintun_directory(), "arm64");
 
     assert!(AssetArch::from_target("i686-pc-windows-msvc").is_err());
-}
-
-#[test]
-fn connected_policy_keeps_dns_above_xray_and_blocks_non_tun_interfaces() {
-    let policy = PolicySpec {
-        mode: PolicyMode::Connected { tun_luid: 42 },
-        allow_lan: true,
-        xray_path: PathBuf::from(r"C:\Program Files\Varmlen\xray.exe"),
-        excluded_apps: Vec::new(),
-        apps_selective: false,
-    };
-    let filters = policy.filters();
-
-    const {
-        assert!(LOOPBACK_FILTER_WEIGHT > DNS_FILTER_WEIGHT);
-        assert!(DNS_FILTER_WEIGHT > XRAY_FILTER_WEIGHT);
-    }
-    assert!(filters.iter().any(|filter| filter.name == "block-dns-v4"));
-    assert!(filters.iter().any(|filter| filter.name == "block-dns-v6"));
-    assert!(filters
-        .iter()
-        .any(|filter| filter.name == "block-outside-tun-v4"));
-    assert!(filters.iter().any(|filter| filter.name == "permit-lan-v6"));
-    assert!(filters.iter().all(|filter| filter.persistent));
-}
-
-#[test]
-fn hold_policy_has_no_tun_escape_and_lan_never_bypasses_dns_block() {
-    let policy = PolicySpec {
-        mode: PolicyMode::Hold,
-        allow_lan: true,
-        xray_path: PathBuf::from(r"C:\Program Files\Varmlen\xray.exe"),
-        excluded_apps: Vec::new(),
-        apps_selective: false,
-    };
-    let filters = policy.filters();
-
-    assert!(filters.iter().any(|filter| filter.name == "block-all-v4"));
-    assert!(filters.iter().any(|filter| filter.name == "block-all-v6"));
-    assert!(!filters
-        .iter()
-        .any(|filter| filter.name.starts_with("permit-lan")));
-    assert!(filters.iter().any(|filter| filter.name == "block-dns-v4"));
-    assert!(filters.iter().any(|filter| filter.name == "block-dns-v6"));
 }

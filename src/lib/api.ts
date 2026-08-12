@@ -150,8 +150,7 @@ export function coreInfo(kind: CoreKind): Promise<CoreInfo> {
   return invoke<CoreInfo>("core_info", { kind });
 }
 
-/** Core replacement is intentionally unavailable: Windows uses the
- *  installer-pinned Xray owned by the privileged service. */
+/** Download an official XTLS release through the privileged service. */
 export function coreInstall(kind: CoreKind, version: string | null = null): Promise<string> {
   return invoke<string>("core_install", { kind, version });
 }
