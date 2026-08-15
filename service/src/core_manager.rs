@@ -4,7 +4,7 @@ use serde::Deserialize;
 use varmlen_protocol::{CoreInfo, CoreInstalledVersion, CoreRelease};
 use varmlen_service_core::runtime::RuntimeLayout;
 
-pub const BUNDLED_XRAY_VERSION: &str = "26.7.28";
+pub const BUNDLED_XRAY_VERSION: &str = "26.3.27";
 const API_ROOT: &str = "https://api.github.com/repos/XTLS/Xray-core/releases";
 const OFFICIAL_DOWNLOAD_ROOT: &str = "https://github.com/XTLS/Xray-core/releases/download/";
 const MAX_RELEASE_BODY: usize = 4 * 1024 * 1024;

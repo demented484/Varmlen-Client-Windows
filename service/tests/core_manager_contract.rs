@@ -112,12 +112,12 @@ fn switched_cores_receive_an_adjacent_complete_windows_runtime() {
     ] {
         std::fs::write(path, contents).unwrap();
     }
-    let core_directory = layout.state_dir.join("cores/xray/26.3.27");
+    let core_directory = layout.state_dir.join("cores/xray/26.7.28");
     std::fs::create_dir_all(&core_directory).unwrap();
     std::fs::write(core_directory.join("xray.exe"), b"selected-xray").unwrap();
 
     let selected = CoreManager::new(layout.clone())
-        .runtime_layout("26.3.27")
+        .runtime_layout("26.7.28")
         .expect("complete selected runtime");
 
     assert_eq!(selected.install_dir, core_directory);

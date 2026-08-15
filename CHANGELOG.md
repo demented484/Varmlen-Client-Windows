@@ -2,9 +2,12 @@
 
 ## 0.3.1
 
-- Replace the obsolete Xray 26.3.27 service runtime with 26.7.28, including
-  Hysteria client and native-TUN UDP fixes while retaining transactional core
-  switching to any installed official version.
+- Keep the service runtime on stable Xray 26.3.27. The first 0.3.1 installers
+  briefly bundled prerelease 26.7.28 and were replaced; transactional core
+  switching to any installed official version is retained. Known trade-off:
+  26.3.27 predates the Hysteria client-reuse and native-TUN UDP FullCone
+  dataplane fixes, so QUIC-heavy apps on HY2 locations may remain partially
+  offline.
 - Restore the kill-switch setting and carry it unchanged through the GUI,
   named-pipe protocol, reconnect journal and privileged service.
 - Replace the removed packet-filter backend with service-owned fail-closed

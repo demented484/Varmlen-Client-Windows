@@ -58,7 +58,7 @@ async fn permanent_bind_errors_are_not_hidden_by_tun_readiness_retry() {
 
 fn request() -> ConnectRequest {
     ConnectRequest {
-        xray_version: "26.7.28".into(),
+        xray_version: "26.3.27".into(),
         xray_config: r#"{"inbounds":[{"protocol":"tun"}]}"#.into(),
         validation_config: r#"{"inbounds":[{"protocol":"socks"}]}"#.into(),
         server_endpoints: vec!["203.0.113.1:443".parse().expect("socket")],

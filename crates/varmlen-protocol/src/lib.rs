@@ -33,7 +33,7 @@ pub struct ConnectRequest {
 }
 
 fn default_xray_version() -> String {
-    "26.7.28".into()
+    "26.3.27".into()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
